@@ -321,7 +321,7 @@ jobs:
 
   build_to_wasm_and_upload:
     name: Build LFortran to WASM and Upload
-    runs-on: "ubuntu-latest"
+    runs-on: plasma-runners
     steps:
       - uses: actions/checkout@v6
         with:
