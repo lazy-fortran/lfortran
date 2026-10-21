@@ -18,6 +18,7 @@ on:
 # When it isn't a PR against main but instead a commit pushed (or merged) to main, then `group` will
 # evaluate to `${{ github.sha }}` but "cancel-in-progress" evaluates to false, so the CI on main
 # will run in a new group `${{ github.sha }}`, but no previous CI will be cancelled on main
+  merge_group:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -34,9 +35,9 @@ jobs:
     # tests moved out of Quick checks (llvm -sc, --detect-leaks, C++
     # compiler build).
     if: >-
-      ${{ github.event_name == 'push' ||
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
           (github.event_name == 'pull_request' &&
-           contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+           contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,23 +59,23 @@ jobs:
       - name: Build Linux
         shell: bash -e -l {0}
         run: |
-            ( cd src && ./build0.sh )
-            export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
-            cmake -S src -B builddir -GNinja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
-              -DWITH_LLVM=yes \
-              -DWITH_LSP=yes \
-              -DWITH_KOKKOS=yes \
-              -DLFORTRAN_BUILD_ALL=yes \
-              -DWITH_STACKTRACE=no \
-              -DWITH_RUNTIME_STACKTRACE=yes \
-              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          ( cd src && ./build0.sh )
+          export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
+          cmake -S src -B builddir -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
+            -DWITH_LLVM=yes \
+            -DWITH_LSP=yes \
+            -DWITH_KOKKOS=yes \
+            -DLFORTRAN_BUILD_ALL=yes \
+            -DWITH_STACKTRACE=no \
+            -DWITH_RUNTIME_STACKTRACE=yes \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-            cmake --build builddir  -j16 --target install
+          cmake --build builddir  -j16 --target install
 
       - name: Test Linux
         shell: bash -e -l {0}
@@ -84,18 +85,18 @@ jobs:
       - name: Test option combinations
         shell: bash -e -l {0}
         run: |
-            export PATH="$(pwd)/inst/bin:$PATH"
-            NPROC=$(nproc)
-            cd src/integration_tests
-            ./run_tests.py -b llvm -sc -j${NPROC}
-            ./run_tests.py -b llvm_submodule -sc -j${NPROC}
-            ./run_tests.py -b llvm --detect-leaks -j${NPROC}
+          export PATH="$(pwd)/inst/bin:$PATH"
+          NPROC=$(nproc)
+          cd src/integration_tests
+          ./run_tests.py -b llvm -sc -j${NPROC}
+          ./run_tests.py -b llvm_submodule -sc -j${NPROC}
+          ./run_tests.py -b llvm --detect-leaks -j${NPROC}
 
       - name: Test C++ compiler build
         shell: bash -e -l {0}
         working-directory: src
         run: |
-            shell ci/test_cpp_version.sh
+          shell ci/test_cpp_version.sh
 
       - name: Test Moved Installation
         shell: bash -e -l {0}
@@ -117,8 +118,8 @@ jobs:
     # llvm_single_invocation, moved out of Quick checks. llvm / llvm -f
     # here also cover the Release build (Quick checks builds Debug).
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -139,50 +140,50 @@ jobs:
       - name: Build Linux
         shell: bash -e -l {0}
         run: |
-            ./build0.sh
-            export CXXFLAGS="-Werror"
-            export CFLAGS="-Werror"
-            cmake . -GNinja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DWITH_LLVM=yes \
-              -DWITH_LSP=yes \
-              -DLFORTRAN_BUILD_ALL=yes \
-              -DWITH_STACKTRACE=no \
-              -DWITH_RUNTIME_STACKTRACE=yes \
-              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-              -DCMAKE_INSTALL_BINDIR=bin/tastic \
-              -DCMAKE_INSTALL_LIBDIR=oh/my/sweet/lib \
-              -DCMAKE_INSTALL_INCLUDEDIR=incl/O/Matic \
-              -DCMAKE_INSTALL_MANDIR=man/O/man \
-              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          ./build0.sh
+          export CXXFLAGS="-Werror"
+          export CFLAGS="-Werror"
+          cmake . -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_LLVM=yes \
+            -DWITH_LSP=yes \
+            -DLFORTRAN_BUILD_ALL=yes \
+            -DWITH_STACKTRACE=no \
+            -DWITH_RUNTIME_STACKTRACE=yes \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+            -DCMAKE_INSTALL_BINDIR=bin/tastic \
+            -DCMAKE_INSTALL_LIBDIR=oh/my/sweet/lib \
+            -DCMAKE_INSTALL_INCLUDEDIR=incl/O/Matic \
+            -DCMAKE_INSTALL_MANDIR=man/O/man \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-            cmake --build . -j16 --target install
+          cmake --build . -j16 --target install
 
       - name: Test Linux
         shell: bash -e -l {0}
         run: |
-            ctest
-            ./run_tests.py
-            ./run_tests.py -vh
-            cd integration_tests
-            ./run_tests.py -m
-            NPROC=$(nproc)
-            ./run_tests.py -b llvm -j${NPROC}
-            ./run_tests.py -b llvm -f -j${NPROC}
-            ./run_tests.py -b llvm_single_invocation -j${NPROC}
-            ./run_tests.py -b llvm --std=f23 -j${NPROC}
-            ./run_tests.py -b llvm -f --std=f23 -j${NPROC}
+          ctest
+          ./run_tests.py
+          ./run_tests.py -vh
+          cd integration_tests
+          ./run_tests.py -m
+          NPROC=$(nproc)
+          ./run_tests.py -b llvm -j${NPROC}
+          ./run_tests.py -b llvm -f -j${NPROC}
+          ./run_tests.py -b llvm_single_invocation -j${NPROC}
+          ./run_tests.py -b llvm --std=f23 -j${NPROC}
+          ./run_tests.py -b llvm -f --std=f23 -j${NPROC}
 
       - name: Test Installation
         shell: bash -e -l {0}
         run: |
-            test -x inst/bin/tastic/lfortran
-            test -f inst/oh/my/sweet/lib/liblfortran_runtime_static.a
-            test -f inst/oh/my/sweet/lib/liblfortran_runtime.so
-            test -f inst/incl/O/Matic/lfortran/impure/lfortran_intrinsics.h
-            test -f inst/man/O/man/man1/lfortran.1
+          test -x inst/bin/tastic/lfortran
+          test -f inst/oh/my/sweet/lib/liblfortran_runtime_static.a
+          test -f inst/oh/my/sweet/lib/liblfortran_runtime.so
+          test -f inst/incl/O/Matic/lfortran/impure/lfortran_intrinsics.h
+          test -f inst/man/O/man/man1/lfortran.1
 
 
 # Commented out to save CI runners:
@@ -229,8 +230,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Run on push to main, or only when the specific label is modified on a PR
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     strategy:
       fail-fast: false
       matrix:
@@ -337,8 +338,7 @@ jobs:
           micromamba-version: '2.0.4-0'
           environment-file: ci/environment_linux_llvm.yml
           create-args: >-
-            llvmdev=21.1.0 
-            python=${{ matrix.python-version }}
+            llvmdev=21.1.0  python=${{ matrix.python-version }}
             bison=3.4
             openblas=0.3.21
             llvm-openmp=14.0.4
@@ -431,44 +431,44 @@ jobs:
       - name: Build
         shell: bash -e -l {0}
         run: |
-            ./build0.sh
-            # Integration tests include EXTRA_ARGS -g (e.g. derived_types_123),
-            # which needs runtime stacktraces. Third-party jobs (LLVM 11/19 and
-            # macOS) must not enable it: Caffeine passes -g at link time and
-            # dwarf_convert.py then fails without llvm-dwarfdump.
-            STACKTRACE_FLAG=""
-            if [[ "${{ matrix.llvm-version }}" != "11" && "${{ matrix.llvm-version }}" != "19" && "${{ matrix.os }}" != *macos* ]]; then
-                STACKTRACE_FLAG="-DWITH_RUNTIME_STACKTRACE=yes"
-            fi
-            cmake . -GNinja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
-              -DWITH_LLVM=yes \
-              -DWITH_LSP=yes \
-              -DLFORTRAN_BUILD_ALL=yes \
-              -DWITH_STACKTRACE=no \
-              ${STACKTRACE_FLAG} \
-              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          ./build0.sh
+          # Integration tests include EXTRA_ARGS -g (e.g. derived_types_123),
+          # which needs runtime stacktraces. Third-party jobs (LLVM 11/19 and
+          # macOS) must not enable it: Caffeine passes -g at link time and
+          # dwarf_convert.py then fails without llvm-dwarfdump.
+          STACKTRACE_FLAG=""
+          if [[ "${{ matrix.llvm-version }}" != "11" && "${{ matrix.llvm-version }}" != "19" && "${{ matrix.os }}" != *macos* ]]; then
+              STACKTRACE_FLAG="-DWITH_RUNTIME_STACKTRACE=yes"
+          fi
+          cmake . -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
+            -DWITH_LLVM=yes \
+            -DWITH_LSP=yes \
+            -DLFORTRAN_BUILD_ALL=yes \
+            -DWITH_STACKTRACE=no \
+            ${STACKTRACE_FLAG} \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-            cmake --build . -j16 --target install
+          cmake --build . -j16 --target install
 
       - name: Test third party codes
         shell: bash -e -l {0}
         if: ${{ matrix.llvm-version == '11' || matrix.llvm-version == '19' || contains(matrix.os, 'macos') }}
         run: |
-            export PATH="$(pwd)/src/bin:$PATH"
-            LAPACK_MODE="smoke"
-            # The full Reference-LAPACK suite costs ~10 min more than smoke.
-            # It exercises LFortran, not LLVM, so run it on the default
-            # version only. LLVM 19 and macOS stay on smoke.
-            if [[ "${{ matrix.llvm-version }}" == "11" ]]; then
-                LAPACK_MODE="full"
-            fi
-            echo "Running LAPACK third-party mode: ${LAPACK_MODE}"
-            RUNNER_OS="${{matrix.os}}" FC=lfortran ci/test_third_party_codes.sh --lapack-mode "${LAPACK_MODE}"
+          export PATH="$(pwd)/src/bin:$PATH"
+          LAPACK_MODE="smoke"
+          # The full Reference-LAPACK suite costs ~10 min more than smoke.
+          # It exercises LFortran, not LLVM, so run it on the default
+          # version only. LLVM 19 and macOS stay on smoke.
+          if [[ "${{ matrix.llvm-version }}" == "11" ]]; then
+              LAPACK_MODE="full"
+          fi
+          echo "Running LAPACK third-party mode: ${LAPACK_MODE}"
+          RUNNER_OS="${{matrix.os}}" FC=lfortran ci/test_third_party_codes.sh --lapack-mode "${LAPACK_MODE}"
 
       # The unit tests exercise the JIT, whose code path differs between
       # LLVM versions, so run them for every version.
@@ -480,9 +480,9 @@ jobs:
         shell: bash -e -l {0}
         if: ${{ matrix.llvm-version != '11' && matrix.llvm-version != '19' && !contains(matrix.os, 'macos') }}
         run: |
-            export PATH="$(pwd)/src/bin:$PATH"
-            export LFORTRAN_LLVM_VERSION="${{ matrix.llvm-version }}"
-            bash ci/test_llvm_integration.sh
+          export PATH="$(pwd)/src/bin:$PATH"
+          export LFORTRAN_LLVM_VERSION="${{ matrix.llvm-version }}"
+          bash ci/test_llvm_integration.sh
 
       # Only where the build above left runtime stacktraces off. Caffeine
       # links with -g, and with -DWITH_RUNTIME_STACKTRACE=yes that sends
@@ -501,8 +501,8 @@ jobs:
     # Kept separate from Test LLVM 19 so third-party codes use a Release
     # compiler. Same PR/main gating as the other LLVM version jobs.
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -571,23 +571,23 @@ jobs:
       - name: Build Linux ( WASM )
         shell: bash -e -l {0}
         run: |
-            export WASI_SDK_PATH=$HOME/ext/wasi-sdk
-            export EMSDK_PATH=$HOME/ext/emsdk
-            export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
-            ./build0.sh
-            cmake . -GNinja \
-              -DCMAKE_BUILD_TYPE=Debug \
-              -DWITH_LLVM=yes \
-              -DWITH_LSP=yes \
-              -DWITH_TARGET_WASM=yes \
-              -DLFORTRAN_BUILD_ALL=yes \
-              -DWITH_STACKTRACE=no \
-              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          export WASI_SDK_PATH=$HOME/ext/wasi-sdk
+          export EMSDK_PATH=$HOME/ext/emsdk
+          export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
+          ./build0.sh
+          cmake . -GNinja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DWITH_LLVM=yes \
+            -DWITH_LSP=yes \
+            -DWITH_TARGET_WASM=yes \
+            -DLFORTRAN_BUILD_ALL=yes \
+            -DWITH_STACKTRACE=no \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-            cmake --build . -j16 --target install
+          cmake --build . -j16 --target install
 
       - name: Test unit tests
         shell: bash -e -l {0}
@@ -596,20 +596,20 @@ jobs:
       - name: Test Linux ( WASM )
         shell: bash -e -l {0}
         run: |
-            export WASI_SDK_PATH=$HOME/ext/wasi-sdk
-            export EMSDK_PATH=$HOME/ext/emsdk
-            export PATH=$HOME/wasmtime-v19.0.2-x86_64-linux:$PATH
-            export WASMTIME_NEW_CLI=0
-            cd integration_tests
-            ./run_tests.py -b llvm_wasm llvm_wasm_emcc
+          export WASI_SDK_PATH=$HOME/ext/wasi-sdk
+          export EMSDK_PATH=$HOME/ext/emsdk
+          export PATH=$HOME/wasmtime-v19.0.2-x86_64-linux:$PATH
+          export WASMTIME_NEW_CLI=0
+          cd integration_tests
+          ./run_tests.py -b llvm_wasm llvm_wasm_emcc
 
   upload_tarball:
     name: Upload Tarball
     runs-on: ubuntu-latest
     # Run on push to main, or only when the specific label is modified on a PR
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -643,8 +643,8 @@ jobs:
     runs-on: ubuntu-latest
     # Run on push to main, or only when the specific label is modified on a PR
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -667,8 +667,8 @@ jobs:
     runs-on: ubuntu-latest
     # Run on push to main, or only when the specific label is modified on a PR
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -693,20 +693,20 @@ jobs:
       - name: Build Linux
         shell: bash -e -l {0}
         run: |
-            ./build0.sh
-            cmake . -GNinja \
-              -DCMAKE_BUILD_TYPE=Debug \
-              -DWITH_LLVM=yes \
-              -DWITH_LSP=yes \
-              -DWITH_MLIR=yes \
-              -DLFORTRAN_BUILD_ALL=yes \
-              -DWITH_STACKTRACE=no \
-              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          ./build0.sh
+          cmake . -GNinja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DWITH_LLVM=yes \
+            -DWITH_LSP=yes \
+            -DWITH_MLIR=yes \
+            -DLFORTRAN_BUILD_ALL=yes \
+            -DWITH_STACKTRACE=no \
+            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-            cmake --build . -j16 --target install
+          cmake --build . -j16 --target install
 
       - name: Test unit tests
         shell: bash -e -l {0}
@@ -715,16 +715,16 @@ jobs:
       - name: Test Linux
         shell: bash -e -l {0}
         run: |
-            cd integration_tests
-            ./run_tests.py -b mlir -j1
+          cd integration_tests
+          ./run_tests.py -b mlir -j1
 
   upload_docs:
     name: Documentation
     runs-on: ubuntu-latest
     # Run on push to main, or only when the specific label is modified on a PR
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -777,8 +777,8 @@ jobs:
     runs-on: ubuntu-latest
     # Run on push to main, or only when the specific label is modified on a PR
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     permissions:
       contents: read
       packages: write
@@ -820,8 +820,8 @@ jobs:
     name: Build xlfortran JupyterLite kernel and run tests
     runs-on: ubuntu-24.04
     if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')) }}
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
     defaults:
       run:
         shell: bash -l {0}
@@ -886,7 +886,8 @@ jobs:
   deploy_jupyterlite:
     name: Deploy JupyterLite to GitHub Pages
     needs: build_xlfortran_jupyterlite
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.ref == 'refs/heads/main')
     permissions:
       pages: write
       id-token: write
