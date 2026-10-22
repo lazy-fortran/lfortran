@@ -325,7 +325,7 @@ jobs:
       github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))
   build_to_wasm_and_upload:
     name: Build LFortran to WASM and Upload
-    runs-on: "ubuntu-latest"
+    runs-on: plasma-runners-lazy-fortran
     steps:
       - uses: actions/checkout@v7
         with:
