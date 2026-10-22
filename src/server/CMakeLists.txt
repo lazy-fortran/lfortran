@@ -38,3 +38,7 @@ target_include_directories(llanguage_server BEFORE PUBLIC ${CMAKE_CURRENT_BINARY
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(llanguage_server PRIVATE -Wthread-safety -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS)
 endif()
+
+add_executable(test_lsp_specification test_lsp_specification.cpp)
+target_link_libraries(test_lsp_specification llanguage_server p::doctest)
+add_test(NAME test_lsp_specification COMMAND test_lsp_specification)
