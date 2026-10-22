@@ -23,14 +23,15 @@ if [ $LINUX ] ; then
 
 (set +x
  echo "##[endgroup]"
- echo "##[group] Install OpenMPI"
+ echo "##[group] Install MPICH"
 )
 
-micromamba install -y -c conda-forge openmpi
-export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe
-export OMPI_MCA_rmaps_base_oversubscribe=1
+# OpenCoarrays cannot use OpenMPI with recent GFortran. Keep its MPICH
+# reference toolchain separate from the main environment, which uses OpenMPI.
+micromamba create -y -p "$PWD/opencoarrays-mpi" -c conda-forge mpich gfortran_linux-64
+export PATH="$PWD/opencoarrays-mpi/bin:$PATH"
 
-(set +x 
+(set +x
  echo "##[endgroup]"
  echo "##[group] Install OpenCoarrays"
 )
@@ -39,12 +40,14 @@ git clone https://github.com/sourceryinstitute/OpenCoarrays.git
 cd OpenCoarrays
 
 cmake -B build \
-  -DCMAKE_INSTALL_PREFIX="$HOME/opencoarrays"
+  -DCMAKE_C_COMPILER=mpicc \
+  -DCMAKE_Fortran_COMPILER=mpifort \
+  -DCMAKE_INSTALL_PREFIX="$PWD/inst"
 
 cmake --build build -j2
 cmake --install build
 
-export PATH="$HOME/opencoarrays/bin:$PATH"
+export PATH="$PWD/inst/bin:$PATH"
 
 cd ..
 
@@ -56,7 +59,7 @@ cafrun --version
 
 fi # LINUX
 
-(set +x 
+(set +x
  echo "##[endgroup]"
  echo "##[group] Install Caffeine"
 )
@@ -118,7 +121,7 @@ cd ..
 
 export PATH="$PWD/caffeine/inst/bin:$PATH"
 
-(set +x 
+(set +x
  echo "##[endgroup]"
  echo "##[group] Test setup"
 )
@@ -237,7 +240,7 @@ echo "PASS: $testfile"
 
 done 3<<< "$tests" # end of while loop over tests
 
-(set +x 
+(set +x
  echo "##[endgroup]"
 )
 
@@ -245,4 +248,4 @@ echo
 echo "All coarray runtime tests passed"
 
 rm -rf caffeine
-rm -rf OpenCoarrays
+rm -rf OpenCoarrays opencoarrays-mpi
