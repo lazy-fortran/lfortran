@@ -47,6 +47,21 @@ class ReplaceIntrinsicFunctions: public ASR::BaseExprReplacer<ReplaceIntrinsicFu
         index_kind(index_kind_) {}
 
 
+    void replace_IntrinsicImpureFunction(ASR::IntrinsicImpureFunction_t* x) {
+        ASRUtils::instantiate_impure_function instantiate_function =
+            ASRUtils::IntrinsicImpureFunctionRegistry::get_instantiate_function(
+                x->m_impure_intrinsic_id);
+        if (!instantiate_function) {
+            return;
+        }
+        Vec<ASR::call_arg_t> args; args.reserve(al, x->n_args);
+        for (size_t i = 0; i < x->n_args; i++) {
+            args.push_back(al, {x->base.base.loc, x->m_args[i]});
+        }
+        *current_expr = instantiate_function(al, x->base.base.loc,
+            PassUtils::instantiation_scope(global_scope, caller_scope, args), args);
+    }
+
     void replace_IntrinsicElementalFunction(ASR::IntrinsicElementalFunction_t* x) {
         if (x->m_value) {
             *current_expr = x->m_value;
@@ -54,7 +69,21 @@ class ReplaceIntrinsicFunctions: public ASR::BaseExprReplacer<ReplaceIntrinsicFu
         }
         // If inside DebugCheckArrayBounds and not inside a type
         // Then keep the IntrinsicElementalFunction because its arguments are used to find ArraySize
-        if (in_debugcheck && !in_ttype) return;
+        // `storage_size` is a scalar, so it is lowered there too: the
+        // backend cannot evaluate it.
+        if (in_debugcheck && !in_ttype && x->m_intrinsic_id != static_cast<int64_t>(
+                ASRUtils::IntrinsicElementalFunctions::StorageSize)) return;
+        // In a type, an integer maximum, such as the extent max(0, n) of an
+        // explicit-shape array, stays an intrinsic, which the code
+        // generators lower. The type can be copied into a scope (a caller
+        // that sizes the result of a procedure from it) that would not see
+        // a procedure instantiated for it here.
+        if (in_ttype && ASRUtils::is_intrinsic_max(*x)
+                && ASRUtils::is_integer(*x->m_type)) {
+            ASR::BaseExprReplacer<ReplaceIntrinsicFunctions>
+                ::replace_IntrinsicElementalFunction(x);
+            return;
+        }
 
         Vec<ASR::call_arg_t> new_args; new_args.reserve(al, x->n_args);
         // Replace any IntrinsicElementalFunctions in the argument first:
@@ -121,7 +150,16 @@ class ReplaceIntrinsicFunctions: public ASR::BaseExprReplacer<ReplaceIntrinsicFu
         Vec<ASR::ttype_t*> arg_types;
         arg_types.reserve(al, x->n_args);
         for( size_t i = 0; i < x->n_args; i++ ) {
-            arg_types.push_back(al, ASRUtils::expr_type(x->m_args[i]));
+            ASR::ttype_t* arg_type = ASRUtils::expr_type(x->m_args[i]);
+            if( ASRUtils::is_array(arg_type) ) {
+                // An array intrinsic indexes its array arguments from 1 in
+                // every dimension, so the implementation takes them as
+                // assumed-shape dummies. An allocatable or pointer dummy would
+                // keep the lower bounds of the actual argument instead.
+                arg_type = ASRUtils::ArrIntrinsic::assumed_length_if_deferred(al,
+                    ASRUtils::type_get_past_allocatable_pointer(arg_type));
+            }
+            arg_types.push_back(al, arg_type);
         }
         ASR::expr_t* current_expr_ = instantiate_function(al, x->base.base.loc,
             PassUtils::instantiation_scope(global_scope, caller_scope,
@@ -265,7 +303,7 @@ class ReplaceFunctionCallReturningArray: public ASR::BaseExprReplacer<ReplaceFun
             Vec<ASR::stmt_t*> if_body;
             if_body.reserve(al, 2);
             if_body.push_back(al, ASRUtils::STMT(ASR::make_ExplicitDeallocate_t(
-                al, loc, to_be_deallocated.p, to_be_deallocated.size())));
+                al, loc, to_be_deallocated.p, to_be_deallocated.size(), nullptr, nullptr)));
             if_body.push_back(al, allocate_stmt);
             ASR::stmt_t* if_ = ASRUtils::STMT(ASR::make_If_t(al, loc_, nullptr, test_expr,
                                 if_body.p, if_body.size(), else_, else_n));
@@ -352,7 +390,7 @@ class ReplaceFunctionCallReturningArray: public ASR::BaseExprReplacer<ReplaceFun
 
         if (is_param) {
             ASR::stmt_t* param_assign = ASRUtils::STMT(ASR::make_Assignment_t(
-                al, x->base.base.loc, this->result_var_, target_var, nullptr, false, false));
+                al, x->base.base.loc, this->result_var_, target_var, nullptr, false, false, false, false));
             pass_result.push_back(al, param_assign);
         }
     }
@@ -434,12 +472,27 @@ void pass_replace_intrinsic_function(Allocator &al, ASR::TranslationUnit_t &unit
     int index_kind = pass_options.descriptor_index_64 ? 8 : 4;
     std::map<ASR::symbol_t*, ASRUtils::IntrinsicArrayFunctions> func2intrinsicid;
     ReplaceIntrinsicFunctionsVisitor v(al, unit.m_symtab, func2intrinsicid, index_kind);
-    v.visit_TranslationUnit(unit);
+    PassUtils::make_new_tu_functions_private(unit, [&]() {
+        v.visit_TranslationUnit(unit);
+    });
     ReplaceFunctionCallReturningArrayVisitor u(al, func2intrinsicid);
     u.visit_TranslationUnit(unit);
+    PassUtils::normalize_string_physical_casts(al, unit);
     PassUtils::UpdateDependenciesVisitor w(al);
     w.visit_TranslationUnit(unit);
+    ASRVerifyOptions verify_options;
+    verify_options.intrinsic_function = true;
+    PassUtils::verify_pass_invariant(unit, pass_options, verify_options,
+        "intrinsic_function");
 }
 
+
+namespace ASRUtils::CompilerVersion {
+
+std::string version_string() {
+    return std::string("LFortran version ") + LFORTRAN_VERSION;
+}
+
+} // namespace ASRUtils::CompilerVersion
 
 } // namespace LCompilers

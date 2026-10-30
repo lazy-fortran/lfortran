@@ -1176,9 +1176,16 @@ static inline reduce_opType convert_id_to_reduce_type(
 #define TRUE(x, l) make_Logical_t(p.m_a, l, true, str2str_null(p.m_a, x))
 #define FALSE(x, l) make_Logical_t(p.m_a, l, false, str2str_null(p.m_a, x))
 
+// Parentheses are kept around a name, an array element or section and a
+// function reference (the parser cannot tell the last ones apart): around a
+// designator, `(x)` is an expression, not a variable (F2018 R1001, 9.1), so
+// semantics needs to know about them, e.g. for an ASSOCIATE selector. Around
+// any other expression they only group and are dropped.
 ast_t* parenthesis(Allocator &al, Location &loc, expr_t *op) {
     switch (op->type) {
-        case LCompilers::LFortran::AST::exprType::Name: {
+        case LCompilers::LFortran::AST::exprType::Name:
+        case LCompilers::LFortran::AST::exprType::FuncCallOrArray:
+        case LCompilers::LFortran::AST::exprType::CoarrayRef: {
             return make_Parenthesis_t(al, loc, op); }
         default : { return (ast_t*)op; }
     }
@@ -1639,10 +1646,10 @@ uint64_t linecol_to_pos(const std::string &s, uint16_t line, uint16_t col) {
 }
 
 // Converts a linear position `position` to a (line, col) tuple
-void pos_to_linecol(const std::string &s, uint64_t position,
-            uint16_t &line, uint16_t &col) {
-    uint64_t pos = 0;
-    uint64_t nlpos = 0;
+void pos_to_linecol(const std::string &s, uint32_t position,
+            uint32_t &line, uint32_t &col) {
+    uint32_t pos = 0;
+    uint32_t nlpos = 0;
     line = 1;
     while (true) {
         nlpos = pos;
@@ -2024,7 +2031,7 @@ ast_t* BLOCK2(Allocator &al, const Location &l, trivia_t* a_trivia,
         /*body*/ IFSTMTS(p.m_a, body), \
         /*n_body*/ 1, \
         /*a_orelse*/ nullptr, \
-        /*n_orelse*/ 0, nullptr, nullptr, nullptr)
+        /*n_orelse*/ 0, /*single*/ true, nullptr, nullptr, nullptr)
 
 #define IFARITHMETIC(cond, lt_label, eq_label, gt_label, l) \
         make_IfArithmetic_t(p.m_a, l, 0, nullptr, \
@@ -2038,21 +2045,22 @@ ast_t* BLOCK2(Allocator &al, const Location &l, trivia_t* a_trivia,
         /*body*/ STMTS(body), \
         /*n_body*/ body.size(), \
         /*a_orelse*/ nullptr, \
-        /*n_orelse*/ 0, trivia_cast(trivia), nullptr, nullptr)
+        /*n_orelse*/ 0, /*single*/ false, trivia_cast(trivia), nullptr, nullptr)
 
 #define IF2(cond, trivia, body, orelse, l) make_If_t(p.m_a, l, 0, nullptr, \
         /*test*/ EXPR(cond), \
         /*body*/ STMTS(body), \
         /*n_body*/ body.size(), \
         /*a_orelse*/ STMTS(orelse), \
-        /*n_orelse*/ orelse.size(), nullptr, trivia_cast(trivia), nullptr)
+        /*n_orelse*/ orelse.size(), /*single*/ false, nullptr, \
+        trivia_cast(trivia), nullptr)
 
 #define IF3(cond, trivia, body, ifblock, l) make_If_t(p.m_a, l, 0, nullptr, \
         /*test*/ EXPR(cond), \
         /*body*/ STMTS(body), \
         /*n_body*/ body.size(), \
         /*a_orelse*/ IFSTMTS(p.m_a, ifblock), \
-        /*n_orelse*/ 1, trivia_cast(trivia), nullptr, nullptr)
+        /*n_orelse*/ 1, /*single*/ false, trivia_cast(trivia), nullptr, nullptr)
 
 #define WHERESINGLE(cond, body, l) make_Where_t(p.m_a, l, 0, nullptr, \
         /*test*/ EXPR(cond), \
@@ -2121,6 +2129,22 @@ static inline void repeat_list_add(Vec<ast_t*> &v, Allocator &al,
 
 static inline ast_t* OMP_PRAGMA2(Allocator &al,
         Location &loc, std::string omp_str) {
+    std::string lower_text = LCompilers::to_lower(omp_str);
+    size_t start = lower_text.find_first_not_of(" \t\r\n");
+    if (start != std::string::npos && lower_text.compare(start, 5, "!$omp") == 0) {
+        start = lower_text.find_first_not_of(" \t\r\n", start + 5);
+        std::string directive = start == std::string::npos ? "" : lower_text.substr(start);
+        const std::string keyword = "threadprivate";
+        if (LCompilers::startswith(directive, keyword) &&
+                (directive.size() == keyword.size() ||
+                 directive[keyword.size()] == '(' ||
+                 directive[keyword.size()] == ' ' ||
+                 directive[keyword.size()] == '\t')) {
+            return make_DeclarationPragma_t(al, loc,
+                LCompilers::LFortran::AST::OMPPragma,
+                LCompilers::s2c(al, omp_str), nullptr);
+        }
+    }
     std::vector<std::string> omp_stmt = LCompilers::string_split_avoid_parentheses(omp_str);
     size_t i = 1;
     bool m_end = false;
@@ -2151,7 +2175,7 @@ static inline ast_t* OMP_PRAGMA2(Allocator &al,
 
 void add_ws_warning(const Location &loc,
         LCompilers::diag::Diagnostics &diagnostics, bool fixed_form,
-        int end_token, int a_kind = 4) {
+        int end_token, int64_t a_kind = 4) {
     if (!fixed_form) {
         if (end_token == yytokentype::KW_ENDDO) {
             diagnostics.parser_style_label(
@@ -2164,32 +2188,24 @@ void add_ws_warning(const Location &loc,
                 {loc},
                 "help: write this as 'end if'");
         } else if (end_token == yytokentype::KW_REAL) {
-                if (a_kind == 4){
+                if (a_kind == 4 || a_kind == 8 || a_kind == 10 || a_kind == 16) {
+                        std::string k = std::to_string(a_kind);
                         diagnostics.parser_style_label(
-                        "Use real(4) instead of real*4",
+                        "Use real(" + k + ") instead of real*" + k,
                         {loc},
-                        "help: write this as 'real(4)'");
-                } else if(a_kind == 8){
-                        diagnostics.parser_style_label(
-                        "Use real(8) instead of real*8",
-                        {loc},
-                        "help: write this as 'real(8)'");
+                        "help: write this as 'real(" + k + ")'");
                 } else {
                         diagnostics.add(LCompilers::diag::Diagnostic(
                             "kind " + std::to_string(a_kind) + " is not supported yet.",
                             LCompilers::diag::Level::Error, LCompilers::diag::Stage::Parser, {LCompilers::diag::Label("", {loc})}));
                 }
         } else if (end_token == yytokentype::KW_INTEGER) {
-                if (a_kind == 4){
+                if (a_kind == 1 || a_kind == 2 || a_kind == 4 || a_kind == 8) {
+                        std::string k = std::to_string(a_kind);
                         diagnostics.parser_style_label(
-                        "Use integer(4) instead of integer*4",
+                        "Use integer(" + k + ") instead of integer*" + k,
                         {loc},
-                        "help: write this as 'integer(4)'");
-                } else if (a_kind == 8){
-                        diagnostics.parser_style_label(
-                        "Use integer(8) instead of integer*8",
-                        {loc},
-                        "help: write this as 'integer(8)'");
+                        "help: write this as 'integer(" + k + ")'");
                 } else {
                         diagnostics.add(LCompilers::diag::Diagnostic(
                             "kind " + std::to_string(a_kind) + " is not supported yet.",
@@ -2211,28 +2227,25 @@ void add_ws_warning(const Location &loc,
                 {loc},
                 msg2);
         } else if (end_token == yytokentype::KW_COMPLEX) {
-            if (a_kind == 16) {
+            // complex*N has kind N/2 (the size of each component); suggest
+            // only for the supported kinds, unsupported ones are reported
+            // by the semantic phase
+            if (a_kind == 8 || a_kind == 16) {
+                std::string k = std::to_string(a_kind / 2);
                 diagnostics.parser_style_label(
-                "Use complex(8) instead of complex*16",
+                "Use complex(" + k + ") instead of complex*" + std::to_string(a_kind),
                 {loc},
-                "help: write this as 'complex(8)'");
-            } else {
-                diagnostics.parser_style_label(
-                "Use complex(4) instead of complex*8",
-                {loc},
-                "help: write this as 'complex(4)'");
+                "help: write this as 'complex(" + k + ")'");
             }
         } else if (end_token == yytokentype::KW_LOGICAL) {
-            if (a_kind == 4) {
+            // suggest only for the supported kinds, unsupported ones are
+            // reported by the semantic phase
+            if (a_kind == 1 || a_kind == 2 || a_kind == 4 || a_kind == 8) {
+                std::string k = std::to_string(a_kind);
                 diagnostics.parser_style_label(
-                "Use logical(4) instead of logical*4",
+                "Use logical(" + k + ") instead of logical*" + k,
                 {loc},
-                "help: write this as 'logical(4)'");
-            } else {
-                diagnostics.parser_style_label(
-                "Use logical(8) instead of logical*8",
-                {loc},
-                "help: write this as 'logical(8)'");
+                "help: write this as 'logical(" + k + ")'");
             }
         } else if (end_token == yytokentype::KW_BYTE) {
             diagnostics.parser_style_label(
@@ -3149,7 +3162,9 @@ void set_m_trivia(decl_stmt_t *s, trivia_t *trivia) {
         TRIVIA_SET(Inquire)
         TRIVIA_SET(Nullify)
         TRIVIA_SET(Pragma)
+        TRIVIA_SET(DeclarationPragma)
         TRIVIA_SET(Open)
+        TRIVIA_SET(Pause)
         TRIVIA_SET(Return)
         TRIVIA_SET(Print)
         TRIVIA_SET(Read)

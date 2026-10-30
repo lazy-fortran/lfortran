@@ -45,9 +45,8 @@
             (EndOfLine)]
         )
     )
-    (FuncCallOrArray
-        allocate
-        []
+    (Allocate
+        0
         [(()
         (FuncCallOrArray
             a
@@ -63,19 +62,16 @@
         ()
         0)]
         []
-        []
-        []
+        ()
     )
-    (FuncCallOrArray
-        deallocate
-        []
+    (Deallocate
+        0
         [(()
         a
         ()
         0)]
         []
-        []
-        []
+        ()
     )
     (FuncCallOrArray
         open
@@ -250,6 +246,7 @@
                     ()
                 )]
                 []
+                .true.
                 ()
                 ()
                 ()
@@ -264,6 +261,7 @@
                     ()
                 )]
                 []
+                .true.
                 ()
                 ()
                 ()
@@ -278,6 +276,7 @@
                     ()
                 )]
                 []
+                .true.
                 ()
                 ()
                 ()
@@ -291,6 +290,7 @@
                     ()
                 )]
                 []
+                .true.
                 ()
                 ()
                 ()

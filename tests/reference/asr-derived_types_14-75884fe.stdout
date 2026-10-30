@@ -20,7 +20,7 @@
                                                     Local
                                                     (IntegerConstant 102 (Integer 4) Decimal)
                                                     (IntegerConstant 102 (Integer 4) Decimal)
-                                                    Save
+                                                    Default
                                                     (Integer 4)
                                                     ()
                                                     Source
@@ -32,9 +32,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             datetime:
                                                 (Variable
@@ -44,7 +46,7 @@
                                                     Local
                                                     (IntegerConstant 105 (Integer 4) Decimal)
                                                     (IntegerConstant 105 (Integer 4) Decimal)
-                                                    Save
+                                                    Default
                                                     (Integer 4)
                                                     ()
                                                     Source
@@ -56,9 +58,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             float:
                                                 (Variable
@@ -68,7 +72,7 @@
                                                     Local
                                                     (IntegerConstant 104 (Integer 4) Decimal)
                                                     (IntegerConstant 104 (Integer 4) Decimal)
-                                                    Save
+                                                    Default
                                                     (Integer 4)
                                                     ()
                                                     Source
@@ -80,9 +84,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             int:
                                                 (Variable
@@ -92,7 +98,7 @@
                                                     Local
                                                     (IntegerConstant 103 (Integer 4) Decimal)
                                                     (IntegerConstant 103 (Integer 4) Decimal)
-                                                    Save
+                                                    Default
                                                     (Integer 4)
                                                     ()
                                                     Source
@@ -104,9 +110,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             invalid:
                                                 (Variable
@@ -116,7 +124,7 @@
                                                     Local
                                                     (IntegerConstant 100 (Integer 4) Decimal)
                                                     (IntegerConstant 100 (Integer 4) Decimal)
-                                                    Save
+                                                    Default
                                                     (Integer 4)
                                                     ()
                                                     Source
@@ -128,9 +136,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             string:
                                                 (Variable
@@ -140,7 +150,7 @@
                                                     Local
                                                     (IntegerConstant 101 (Integer 4) Decimal)
                                                     (IntegerConstant 101 (Integer 4) Decimal)
-                                                    Save
+                                                    Default
                                                     (Integer 4)
                                                     ()
                                                     Source
@@ -152,9 +162,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     enum_type
@@ -255,9 +267,11 @@
                                     ()
                                     .false.
                                     .false.
+                                    .false.
                                     NotMethod
                                     ()
                                     []
+                                    ()
                                 )
                         })
                     derived_types_14_module
@@ -273,6 +287,16 @@
                     (SymbolTable
                         2
                         {
+                            1_enum_type:
+                                (ExternalSymbol
+                                    2
+                                    1_enum_type
+                                    4 enum_type
+                                    derived_types_14_module
+                                    []
+                                    enum_type
+                                    Public
+                                ),
                             check:
                                 (Function
                                     (SymbolTable
@@ -298,9 +322,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             res:
                                                 (Variable
@@ -322,9 +348,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     check
@@ -354,22 +382,14 @@
                                         ()
                                         .false.
                                         .false.
+                                        .false.
+                                        .false.
                                     )]
                                     (Var 7 res)
                                     Public
                                     .true.
                                     .true.
                                     ()
-                                ),
-                            enum_type:
-                                (ExternalSymbol
-                                    2
-                                    enum_type
-                                    4 enum_type
-                                    derived_types_14_module
-                                    []
-                                    enum_type
-                                    Public
                                 ),
                             toml_get_value_type:
                                 (Function
@@ -456,9 +476,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             vtype:
                                                 (Variable
@@ -480,9 +502,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     toml_get_value_type
@@ -524,6 +548,8 @@
                                             ()
                                             .false.
                                             .false.
+                                            .false.
+                                            .false.
                                         )
                                         (Return)]
                                         []
@@ -547,6 +573,8 @@
                                                 (IntegerConstant 102 (Integer 4) Decimal)
                                             )
                                             ()
+                                            .false.
+                                            .false.
                                             .false.
                                             .false.
                                         )
@@ -574,6 +602,8 @@
                                             ()
                                             .false.
                                             .false.
+                                            .false.
+                                            .false.
                                         )
                                         (Return)]
                                         []
@@ -597,6 +627,8 @@
                                                 (IntegerConstant 104 (Integer 4) Decimal)
                                             )
                                             ()
+                                            .false.
+                                            .false.
                                             .false.
                                             .false.
                                         )
@@ -624,6 +656,8 @@
                                             ()
                                             .false.
                                             .false.
+                                            .false.
+                                            .false.
                                         )
                                         (Return)]
                                         []
@@ -637,6 +671,8 @@
                                             (IntegerConstant 100 (Integer 4) Decimal)
                                         )
                                         ()
+                                        .false.
+                                        .false.
                                         .false.
                                         .false.
                                     )]

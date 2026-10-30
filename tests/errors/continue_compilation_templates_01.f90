@@ -1991,10 +1991,10 @@ module requirement_undeclared_arg_1
 
 end module
 
-! A named constant of a template initialized with an intrinsic function of a
-! deferred constant is folded at instantiation for the numeric intrinsics
-! such as `abs` or `max`; the others are rejected instead of leaving the
-! constant without a value (#13357).
+! A named constant of a template is initialized with a constant expression;
+! one of a deferred constant, such as `sin(real(n))`, is evaluated when the
+! template is instantiated, but a variable never reduces to a constant
+! (#13357).
 module template_deferred_const_intrinsic_1
     implicit none
 
@@ -2003,27 +2003,27 @@ module template_deferred_const_intrinsic_1
     contains
         function f() result(r)
             real :: r
-            real, parameter :: x = sin(real(n))  ! {Error} initialization of named constant `x` with this expression of a deferred constant is not supported yet
+            real, parameter :: x = -r  ! {Error} Initialization of `x` must reduce to a compile time constant.
             r = x
         end function
     end template
 
 end module
 
-! The rejection of such an initializer is final, so that instantiating the
-! template reports it instead of failing on a constant without a value; the
-! instantiation reports a division by zero in the initializer it evaluates
+! Instantiating a template evaluates the initializers of its named constants
+! that use a deferred constant, and reports the errors of that evaluation,
+! such as a division by zero or the square root of a negative number
 ! (#13357).
 module template_deferred_const_instantiated_1
     implicit none
     integer, parameter :: three = 3
 
-    template tmpl_ishft {n}
+    template tmpl_sqrt {n}
         deferred integer, parameter :: n
     contains
         function f() result(r)
             integer :: r
-            integer, parameter :: k = ishft(n, 1) + 1  ! {Error} initialization of named constant `k` with this expression of a deferred constant is not supported yet
+            integer, parameter :: k = int(sqrt(real(n - 4)))  ! {Error} Argument of `sqrt` has a negative argument
             r = k
         end function
     end template
@@ -2060,8 +2060,8 @@ module template_deferred_const_instantiated_1
 
 contains
 
-    subroutine use_ishft()
-        instantiate tmpl_ishft {three}
+    subroutine use_sqrt()
+        instantiate tmpl_sqrt {three}
     end subroutine
 
     subroutine use_div()
@@ -2353,4 +2353,573 @@ module continue_compilation_templates_01_only_generic_spec
     instantiate instantiate_only_generic_spec_t {integer}, only: operator(+)  ! {Error} operator(+) is not defined in template 'instantiate_only_generic_spec_t'
     instantiate instantiate_only_generic_spec_t {real}, only: assignment(=)  ! {Error} assignment(=) is not defined in template 'instantiate_only_generic_spec_t'
     instantiate instantiate_only_generic_spec_t {real}, only: operator(.plus.)  ! {Error} operator(.plus.) is not defined in template 'instantiate_only_generic_spec_t'
+end module
+
+! Component bounds in a template's derived type must be constant: a
+! deferred constant combined with a non-constant variable is rejected.
+module continue_compilation_templates_01_nonconst_bound
+    implicit none
+    integer :: nonconst_bound_m = 3
+    template nonconst_bound_tmpl_01 {n}
+        deferred integer, parameter :: n
+        type :: nonconst_bound_t_01
+            integer :: b(n*nonconst_bound_m)  ! {Error} Explicit shaped array with nonconstant bounds
+        end type
+    end template
+
+    template nonconst_bound_tmpl_02 {n}
+        deferred integer, parameter :: n
+        type :: nonconst_bound_t_02
+            integer :: b(max(n*nonconst_bound_m, 5))  ! {Error} Explicit shaped array with nonconstant bounds
+        end type
+    end template
+end module
+
+! A defined operator can be a template instantiation argument (#13549). These
+! cover its diagnostics: an undeclared operator, an operator with no specific
+! procedure matching the deferred interface, and an operator passed where the
+! template expects a deferred type.
+module continue_compilation_templates_01_defop_ops
+    implicit none
+    interface operator(.minus.)
+        procedure defop_sub_int
+    end interface
+contains
+    pure function defop_sub_int(x, y) result(r)
+        integer, intent(in) :: x, y
+        integer :: r
+        r = x - y
+    end function
+end module
+
+module continue_compilation_templates_01_defop_tmpl
+    implicit none
+
+    requirement defop_req {T, op}
+        deferred type :: T
+        deferred interface
+            pure function op(x, y) result(z)
+                type(T), intent(in) :: x, y
+                type(T) :: z
+            end function
+        end interface
+    end requirement
+
+    template defop_t {T, op}
+        require :: defop_req {T, op}
+    contains
+        pure function defop_f(x, y) result(z)
+            type(T), intent(in) :: x, y
+            type(T) :: z
+            z = op(x, y)
+        end function
+    end template
+contains
+    template function defop_apply{op}(x, y) result(r)
+        deferred interface
+            pure integer function op(x, y)
+                integer, intent(in) :: x, y
+            end function
+        end interface
+        integer, intent(in) :: x, y
+        integer :: r
+        r = op(x, y)
+    end function
+
+    template function defop_applyr{op}(x, y) result(r)
+        deferred interface
+            pure real function op(x, y)
+                real, intent(in) :: x, y
+            end function
+        end interface
+        real, intent(in) :: x, y
+        real :: r
+        r = op(x, y)
+    end function
+end module
+
+module continue_compilation_templates_01_defop
+    use continue_compilation_templates_01_defop_ops
+    use continue_compilation_templates_01_defop_tmpl
+    implicit none
+contains
+    subroutine defop_undeclared()
+        print *, defop_apply{operator(.plus.)}(9, 2)  ! {Error} the defined operator '.plus.' is not declared
+    end subroutine
+
+    subroutine defop_no_match()
+        print *, defop_applyr{operator(.minus.)}(9.0, 2.0)  ! {Error} no specific procedure of the defined operator '.minus.' matches the interface of 'op'
+    end subroutine
+
+    subroutine defop_for_type()
+        instantiate defop_t {operator(.minus.), integer}, only: defop_g => defop_f  ! {Error} the instantiation argument 'operator(.minus.)' for 't' requires a deferred procedure
+    end subroutine
+end module
+
+! A deferred type has no implicit conversion to the real type of a complex
+! part, so assigning a value of a deferred type to `z%re` or `z%im` inside a
+! template is a type mismatch (#13678). This used to fail an assertion in the
+! implicit-cast rules.
+module continue_compilation_templates_01_complex_part_deferred
+    implicit none
+contains
+    template subroutine set_re{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        complex :: z
+        z%re = x  ! {Error} type mismatch (real and t)
+    end subroutine
+
+    template subroutine set_im{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        complex :: z(3)
+        z%im = x  ! {Error} type mismatch (real and t)
+    end subroutine
+end module
+
+! A deferred type has no conversion to the integer type of a DO loop control,
+! so using a value of a deferred type as a DO variable or as a loop control
+! expression inside a template is an error (#13678). This used to fail an
+! assertion in the implicit-cast rules.
+module continue_compilation_templates_01_do_deferred
+    implicit none
+contains
+    template subroutine do_start{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        integer :: i
+        do i = x, 2  ! {Error} start expression in DO loop must be integer, not t
+        end do
+    end subroutine
+
+    template subroutine do_end{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        integer :: i
+        do i = 1, x  ! {Error} end expression in DO loop must be integer, not t
+        end do
+    end subroutine
+
+    template subroutine do_step{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        integer :: i
+        do i = 1, 2, x  ! {Error} step expression in DO loop must be integer, not t
+        end do
+    end subroutine
+
+    template subroutine do_var{t}(x)
+        deferred type :: t
+        type(t), intent(inout) :: x
+        do x = 1, 2  ! {Error} DO variable must be integer, not t
+        end do
+    end subroutine
+end module
+
+! A deferred type has no intrinsic arithmetic and no implicit conversion, so
+! an arithmetic operator between a deferred type and an intrinsic type inside a
+! template is undefined unless a requirement provides it (#13678). This used to
+! fail an assertion in the implicit-cast rules.
+module continue_compilation_templates_01_arith_deferred
+    implicit none
+contains
+    template subroutine add_int{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        integer :: y
+        y = x + 1  ! {Error} Operator `+` undefined for the types in the expression `t + integer(4)`
+    end subroutine
+
+    template subroutine mul_real_left{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        real :: y
+        y = 2.0 * x  ! {Error} Operator `*` undefined for the types in the expression `real(4) * t`
+    end subroutine
+
+    template subroutine pow_int{t}(x)
+        deferred type :: t
+        type(t), intent(in) :: x
+        integer :: y
+        y = x ** 2  ! {Error} Operator `**` undefined for the types in the expression `t ** integer(4)`
+    end subroutine
+end module
+
+module continue_compilation_templates_01_defasgn
+    implicit none
+
+    requirement defasgn_r{lhs_t, rhs_t, assign_i}
+        deferred type :: lhs_t, rhs_t
+        deferred interface
+            subroutine assign_i(lhs, rhs)
+                type(lhs_t), intent(out) :: lhs
+                type(rhs_t), intent(in) :: rhs
+            end subroutine
+        end interface
+    end requirement
+
+    template defasgn_tmpl{copy_t, original_t, assign_s}
+        deferred type :: copy_t, original_t
+        require :: defasgn_r{copy_t, original_t, assign_s}
+        interface assignment(=)
+            module procedure assign_s
+        end interface
+    contains
+        function defasgn_copy(original) result(copy)
+            type(copy_t) :: original
+            type(original_t) :: copy
+            copy = original  ! {Error} Type mismatch in assignment, the types must be compatible
+        end function
+    end template
+end module
+
+module continue_compilation_templates_01_clash_tmpl
+    implicit none
+    template clash_t {T}
+        deferred type :: T
+        type :: clash_box
+            type(T) :: x
+        end type
+    contains
+        function clash_get(b) result(r)
+            type(clash_box), intent(in) :: b
+            type(T) :: r
+            r = b%x
+        end function
+    end template
+end module
+
+module continue_compilation_templates_01_clash
+    use continue_compilation_templates_01_clash_tmpl
+    implicit none
+    type :: clash_box
+        real :: y
+    end type
+    instantiate clash_t {integer}  ! {Error} the instantiation of template 'clash_t' defines 'clash_box', which is already declared in this scope
+contains
+    subroutine clash_proc()
+        integer :: clash_get
+        instantiate clash_t {real}  ! {Error} the instantiation of template 'clash_t' defines 'clash_get', which is already declared in this scope
+        clash_get = 1
+    end subroutine
+end module
+
+module continue_compilation_templates_01_generic_tmpl
+    implicit none
+    template gen_t {T, plus}
+        deferred type :: T
+        deferred interface
+            function plus(x, y) result(z)
+                type(T), intent(in) :: x, y
+                type(T) :: z
+            end function
+        end interface
+        interface gen_dbl
+            procedure gen_twice
+        end interface
+    contains
+        function gen_twice(x) result(z)
+            type(T), intent(in) :: x
+            type(T) :: z
+            z = plus(x, x)
+        end function
+    end template
+end module
+
+module continue_compilation_templates_01_generic
+    use continue_compilation_templates_01_generic_tmpl
+    implicit none
+    instantiate gen_t {integer, gen_iadd}
+    instantiate gen_t {integer, gen_iadd}  ! {Error} the instantiation of template 'gen_t' defines 'gen_twice', which is already declared in this scope
+contains
+    function gen_iadd(x, y) result(z)
+        integer, intent(in) :: x, y
+        integer :: z
+        z = x + y
+    end function
+    subroutine gen_proc()
+        integer :: gen_dbl
+        instantiate gen_t {integer, gen_iadd}  ! {Error} the instantiation of template 'gen_t' defines 'gen_dbl', which is already declared in this scope
+        gen_dbl = 1
+    end subroutine
+end module
+
+! A function reference through a dummy procedure with a deferred interface
+! checks its actual arguments against the deferred types.
+module continue_compilation_templates_01_proc_dummy
+    implicit none
+    template proc_dummy_t {foo_f, left_t, right_t, foo_t}
+        deferred type :: left_t, right_t, foo_t
+        deferred interface
+            function foo_f(left, right) result(foo)
+                type(left_t), intent(in) :: left
+                type(right_t), intent(in) :: right
+                type(foo_t) :: foo
+            end function
+        end interface
+    contains
+        function invoke_foo(foo, left, right) result(r)
+            procedure(foo_f) :: foo
+            type(left_t), intent(in) :: left
+            type(right_t), intent(in) :: right
+            type(foo_t) :: r
+            r = foo(left, right)
+            r = foo(right, right)  ! {Error} Type mismatch in argument `left`: expected `left_t` but got `right_t`.
+            r = foo(left, left)  ! {Error} Type mismatch in argument `right`: expected `right_t` but got `left_t`.
+            r = foo(right, left)  ! {Error} Type mismatch in argument `left`: expected `left_t` but got `right_t`.
+        end function
+    end template
+end module
+
+! An operator from a deferred interface applies only if the deferred types of
+! its dummies match the deferred types of the operands (#14716).
+module continue_compilation_templates_01_op_mismatch
+    implicit none
+    template op_mismatch_t {a_t, b_t, p, q, r}
+        deferred type :: a_t, b_t
+        deferred interface
+            function p(x, y)
+                type(a_t), intent(in) :: x
+                type(b_t), intent(in) :: y
+                type(b_t) :: p
+            end function
+            function q(x, y)
+                type(a_t), intent(in) :: x
+                type(b_t), intent(in) :: y
+                logical :: q
+            end function
+            function r(x, y)
+                type(a_t), intent(in) :: x
+                type(b_t), intent(in) :: y
+                logical :: r
+            end function
+        end interface
+        interface operator(+)
+            module procedure p
+        end interface
+        interface operator(==)
+            module procedure q
+        end interface
+        interface operator(.and.)
+            module procedure r
+        end interface
+    contains
+        subroutine op_mismatch_s(x, y, l)
+            type(a_t), intent(in) :: x
+            type(b_t), intent(inout) :: y
+            logical, intent(out) :: l
+            y = x + y
+            l = x == y
+            l = x .and. y
+            y = y + x  ! {Error} Operator `+` undefined for the types in the expression `b_t + a_t`
+            l = y == x  ! {Error} Operator `==` undefined for the types in the expression `b_t == a_t`
+            l = y .and. x  ! {Error} Left operand must be LOGICAL or LOGICAL array
+        end subroutine
+    end template
+end module
+
+! A unary `-` on a value of a deferred type needs a user-defined `operator(-)`
+! whose dummy has that deferred type (#13913).
+module continue_compilation_templates_01_unary_minus
+    implicit none
+contains
+    template subroutine unary_minus_s{t}(x)
+        deferred type :: t
+        type(t), intent(inout) :: x
+        integer :: y
+        y = -x  ! {Error} Operator `-` undefined for the type in the expression `-t`
+    end subroutine
+end module
+
+module continue_compilation_templates_01_unary_minus_mismatch
+    implicit none
+    template unary_minus_mismatch_t {a_t, b_t, p}
+        deferred type :: a_t, b_t
+        deferred interface
+            function p(x)
+                type(a_t), intent(in) :: x
+                type(b_t) :: p
+            end function
+        end interface
+        interface operator(-)
+            module procedure p
+        end interface
+    contains
+        subroutine unary_minus_mismatch_s(x, y)
+            type(a_t), intent(in) :: x
+            type(b_t), intent(inout) :: y
+            y = -x
+            y = -y  ! {Error} Operator `-` undefined for the type in the expression `-b_t`
+        end subroutine
+    end template
+end module
+
+! Every interface body of a deferred interface declares a deferred procedure,
+! so its name must be a deferred argument of the template, templated
+! subprogram or requirement (#13465).
+module continue_compilation_templates_01_deferred_iface_name
+    implicit none
+    template deferred_iface_name_t {f}
+        deferred interface
+            integer function f(y)
+                integer, intent(in) :: y
+            end function
+            integer function g(y)  ! {Error} 'g' is not a deferred argument of 'deferred_iface_name_t'
+                integer, intent(in) :: y
+            end function
+        end interface
+    end template
+
+    template deferred_iface_call_t {a_t}
+        deferred type :: a_t
+        deferred interface
+            function p(x)  ! {Error} 'p' is not a deferred argument of 'deferred_iface_call_t'
+                type(a_t) :: x, p
+            end function
+        end interface
+    contains
+        function deferred_iface_call_g(x)
+            type(a_t) :: x, deferred_iface_call_g
+            deferred_iface_call_g = p(x)  ! {Error} Function 'p' not found
+        end function
+    end template
+contains
+    template subroutine deferred_iface_name_s{f}(x)
+        deferred interface
+            integer function f(y)
+                integer, intent(in) :: y
+            end function
+            integer function g(y)  ! {Error} 'g' is not a deferred argument of 'deferred_iface_name_s'
+                integer, intent(in) :: y
+            end function
+        end interface
+        integer, intent(inout) :: x
+        x = f(x)
+    end subroutine
+end module
+
+! A unary `-` on an array of a deferred type also needs a user-defined
+! `operator(-)` for that deferred type (#13657).
+module continue_compilation_templates_01_unary_minus_array
+    implicit none
+contains
+    template subroutine unary_minus_array_s{t}(x, y)
+        deferred type :: t
+        type(t), intent(in) :: x(:)
+        type(t), intent(out) :: y(:)
+        y = -x  ! {Error} Operator `-` undefined for the type in the expression `-t[:]`
+    end subroutine
+end module
+
+! A unary `+` on a value of a deferred type needs a user-defined `operator(+)`
+! whose dummy has that deferred type (#14730).
+module continue_compilation_templates_01_unary_plus
+    implicit none
+contains
+    template subroutine unary_plus_s{t}(x, y)
+        deferred type :: t
+        type(t), intent(in) :: x
+        type(t), intent(out) :: y
+        y = +x  ! {Error} Operator `+` undefined for the type in the expression `+t`
+    end subroutine
+end module
+
+! The same holds for an array of a deferred type (#14730).
+module continue_compilation_templates_01_unary_plus_array
+    implicit none
+contains
+    template subroutine unary_plus_array_s{t}(x, y)
+        deferred type :: t
+        type(t), intent(in) :: x(:)
+        type(t), intent(out) :: y(:)
+        y = +x  ! {Error} Operator `+` undefined for the type in the expression `+t[:]`
+    end subroutine
+end module
+
+! An INSTANTIATE statement without an only-list defines the named constants
+! of the template too.
+module continue_compilation_templates_01_const_clash
+    implicit none
+    template const_clash_t {n}
+        deferred integer, parameter :: n
+        integer, parameter :: const_k = n*2
+    end template
+contains
+    subroutine const_clash_proc()
+        integer, parameter :: const_k = 1
+        instantiate const_clash_t {3}  ! {Error} the instantiation of template 'const_clash_t' defines 'const_k', which is already declared in this scope
+        print *, const_k
+    end subroutine
+end module
+
+! A subscript of a named constant array that becomes constant only in the
+! instantiation is checked against the bounds of the array (#14765).
+module continue_compilation_templates_01_item_oob
+    implicit none
+    template item_oob_t {n}
+        deferred integer, parameter :: n
+        integer, parameter :: item_arr(2) = [n, 2*n]
+        type :: item_w
+            integer :: b(item_arr(n))  ! {Error} Array index 3 is out of bounds (1 to 2) in dimension 1
+        end type
+    end template
+contains
+    subroutine use_item_oob()
+        instantiate item_oob_t {3}, only: item_w3 => item_w
+    end subroutine
+end module
+
+! template_save_shadow_1
+! C1610: a local of a template procedure named like a deferred constant hides
+! it, and is a local like any other, so it cannot have the SAVE attribute.
+module template_save_shadow_1_m
+    implicit none
+    template save_shadow_tmpl {n}
+        deferred integer, parameter :: n
+    contains
+        integer function f() result(r)
+            integer, save :: n = 7  ! {Error} variable 'n' in a template or templated procedure cannot have the save attribute
+            r = n
+        end function
+    end template
+end module
+
+! A deferred constant, or a named constant that depends on one, has no value
+! in the template; using it as a kind parameter is not supported yet (#14770).
+module continue_compilation_templates_01_deferred_kind
+    implicit none
+    template deferred_kind_t {p}
+        deferred integer, parameter :: p
+        integer, parameter :: wp = p
+        type :: deferred_kind_w
+            real(p) :: x(3)  ! {Error} using a deferred constant as a kind parameter is not supported yet
+        end type
+    contains
+        integer function deferred_kind_f()
+            real(p) :: x  ! {Error} using a deferred constant as a kind parameter is not supported yet
+            deferred_kind_f = kind(x)
+        end function
+
+        integer function deferred_kind_g()
+            integer(wp) :: i  ! {Error} using a named constant that depends on a deferred constant as a kind parameter is not supported yet
+            deferred_kind_g = kind(i)
+        end function
+
+        real function deferred_kind_h()
+            deferred_kind_h = 1.0_p  ! {Error} using a deferred constant as a kind parameter is not supported yet
+        end function
+
+        integer function deferred_kind_i()
+            deferred_kind_i = 2_wp  ! {Error} using a named constant that depends on a deferred constant as a kind parameter is not supported yet
+        end function
+
+        logical function deferred_kind_l()
+            deferred_kind_l = .true._p  ! {Error} using a deferred constant as a kind parameter is not supported yet
+        end function
+
+        character function deferred_kind_c()
+            deferred_kind_c = p_"a"  ! {Error} using a deferred constant as a kind parameter is not supported yet
+        end function
+    end template
 end module

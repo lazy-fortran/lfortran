@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 
+# `pixi run build [cmake_args...]` runs this with the Prefix `shell` as
+# `build1.sh <build_dir> [cmake_args...]`. Keep to syntax that Bash also
+# supports.
+
 set -e
 set -x
+
+build_dir="${1:-.}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
 
 cmake \
     -DCMAKE_BUILD_TYPE=Debug \
@@ -15,8 +24,8 @@ cmake \
     -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH_LFORTRAN;$CONDA_PREFIX" \
     -DCMAKE_INSTALL_LIBDIR=share/lfortran/lib \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DCMAKE_C_FLAGS="${CFLAGS} -fdiagnostics-color=always" \
-    -DCMAKE_CXX_FLAGS="${CXXFLAGS} -fdiagnostics-color=always" \
+    -DCMAKE_COLOR_DIAGNOSTICS=ON \
     -G Ninja \
-    .
-cmake --build .
+    -S . -B "$build_dir" \
+    "$@"
+cmake --build "$build_dir"

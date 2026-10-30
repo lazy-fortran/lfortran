@@ -26,13 +26,15 @@ endif()
 set(LFORTRAN_SRC
     lfortran_accessor.cpp
     lsp_cli.cpp
+    cuda_link_helpers.cpp
     ${LFORTRAN_SRC}
 )
 
 if (NOT EMSCRIPTEN OR LFORTRAN_BUILD_TO_WASM)
 
 add_executable(lfortran ${LFORTRAN_SRC})
-target_include_directories(lfortran PRIVATE "tpl")
+# tpl/ contains only vendored third-party code (cpp-terminal, whereami).
+target_include_directories(lfortran SYSTEM PRIVATE "tpl")
 target_link_libraries(lfortran ${LFORTRAN_LINK_LIBRARIES})
 if (LFORTRAN_STATIC_BIN)
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux"
@@ -52,6 +54,18 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux"
     OR CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
 
     target_link_options(lfortran PRIVATE "LINKER:--export-dynamic")
+endif()
+
+if (APPLE)
+    # At every launch dyld coalesces each exported weak symbol with the loaded
+    # dylibs. A Debug build exports ~66,000 weak C++ symbols (inline functions
+    # and template instantiations), so each lfortran invocation spent ~150 ms
+    # in dyld before main(). The JIT only needs the C symbols (runtime and
+    # Jupyter display functions), so do not export C++ symbols.
+    target_link_options(lfortran PRIVATE
+        "LINKER:-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/unexported_symbols.txt")
+    set_property(TARGET lfortran APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/unexported_symbols.txt")
 endif()
 
 if (WITH_STACKTRACE AND APPLE AND CMAKE_CXX_COMPILER_ID MATCHES Clang)

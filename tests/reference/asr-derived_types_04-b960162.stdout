@@ -44,9 +44,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             self:
                                                 (Variable
@@ -73,9 +75,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     all_abstract
@@ -91,7 +95,7 @@
                                         Interface
                                         ()
                                         .true.
-                                        .false.
+                                        .true.
                                         .false.
                                         .false.
                                         .false.
@@ -144,9 +148,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     bitset_type
@@ -160,7 +166,7 @@
                                     [num_bits]
                                     []
                                     Source
-                                    Private
+                                    Public
                                     .false.
                                     .true.
                                     .false.

@@ -32,7 +32,7 @@
                                     tomlf_build_array
                                     []
                                     get_elem_array
-                                    Public
+                                    Private
                                 ),
                             get_elem_keyval@get_value:
                                 (ExternalSymbol
@@ -42,7 +42,7 @@
                                     tomlf_build_array
                                     []
                                     get_elem_keyval
-                                    Public
+                                    Private
                                 ),
                             get_elem_table@get_value:
                                 (ExternalSymbol
@@ -52,7 +52,7 @@
                                     tomlf_build_array
                                     []
                                     get_elem_table
-                                    Public
+                                    Private
                                 ),
                             get_value:
                                 (GenericProcedure
@@ -73,7 +73,7 @@
                                     tomlf_build_keyval
                                     []
                                     get_value_float_dp
-                                    Public
+                                    Private
                                 ),
                             get_value_float_sp@get_value:
                                 (ExternalSymbol
@@ -83,7 +83,7 @@
                                     tomlf_build_keyval
                                     []
                                     get_value_float_sp
-                                    Public
+                                    Private
                                 )
                         })
                     tomlf_build
@@ -125,9 +125,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             pos:
                                                 (Variable
@@ -149,9 +151,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             ptr:
                                                 (Variable
@@ -175,9 +179,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             stat:
                                                 (Variable
@@ -199,9 +205,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     get_elem_array
@@ -262,9 +270,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             pos:
                                                 (Variable
@@ -286,9 +296,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             ptr:
                                                 (Variable
@@ -312,9 +324,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             stat:
                                                 (Variable
@@ -336,9 +350,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     get_elem_keyval
@@ -399,9 +415,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             pos:
                                                 (Variable
@@ -423,9 +441,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             ptr:
                                                 (Variable
@@ -449,9 +469,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             stat:
                                                 (Variable
@@ -473,9 +495,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     get_elem_table
@@ -513,6 +537,8 @@
                                         ()
                                         .false.
                                         .false.
+                                        .false.
+                                        .false.
                                     )]
                                     ()
                                     Public
@@ -527,18 +553,8 @@
                                     [4 get_elem_table
                                     4 get_elem_array
                                     4 get_elem_keyval
-                                    4 get_value_float_sp
-                                    4 get_value_float_dp]
-                                    Public
-                                ),
-                            get_value_float_dp:
-                                (ExternalSymbol
-                                    4
-                                    get_value_float_dp
-                                    9 get_value_float_dp
-                                    tomlf_build_keyval
-                                    []
-                                    get_value_float_dp
+                                    4 get_value_float_sp@get_value
+                                    4 get_value_float_dp@get_value]
                                     Public
                                 ),
                             get_value_float_dp@get_value:
@@ -549,17 +565,7 @@
                                     tomlf_build_keyval
                                     []
                                     get_value_float_dp
-                                    Public
-                                ),
-                            get_value_float_sp:
-                                (ExternalSymbol
-                                    4
-                                    get_value_float_sp
-                                    9 get_value_float_sp
-                                    tomlf_build_keyval
-                                    []
-                                    get_value_float_sp
-                                    Public
+                                    Private
                                 ),
                             get_value_float_sp@get_value:
                                 (ExternalSymbol
@@ -569,7 +575,7 @@
                                     tomlf_build_keyval
                                     []
                                     get_value_float_sp
-                                    Public
+                                    Private
                                 ),
                             global_var:
                                 (ExternalSymbol
@@ -628,9 +634,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             stat:
                                                 (Variable
@@ -652,9 +660,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             val:
                                                 (Variable
@@ -676,9 +686,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     get_value_float_dp
@@ -735,9 +747,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             stat:
                                                 (Variable
@@ -759,9 +773,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             val:
                                                 (Variable
@@ -783,9 +799,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 )
                                         })
                                     get_value_float_sp
@@ -837,9 +855,11 @@
                                     ()
                                     .false.
                                     .false.
+                                    .false.
                                     NotMethod
                                     ()
                                     []
+                                    ()
                                 )
                         })
                     tomlf_build_keyval

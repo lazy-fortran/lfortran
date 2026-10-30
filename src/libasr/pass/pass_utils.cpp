@@ -7,9 +7,75 @@
 #include <libasr/pass/intrinsic_function_registry.h>
 #include <libasr/casting_utils.h>
 
+#include <iostream>
+
 namespace LCompilers {
 
     namespace PassUtils {
+
+        class NormalizeStringPhysicalCasts:
+                public ASR::CallReplacerOnExpressionsVisitor<NormalizeStringPhysicalCasts> {
+        public:
+            Allocator &al;
+
+            NormalizeStringPhysicalCasts(Allocator &al_): al{al_} {
+                call_replacer_on_value = false;
+            }
+
+            void call_replacer() {
+                if (!ASR::is_a<ASR::StringPhysicalCast_t>(**current_expr)) return;
+                ASR::StringPhysicalCast_t *x =
+                    ASR::down_cast<ASR::StringPhysicalCast_t>(*current_expr);
+                ASR::string_physical_typeType physical =
+                    ASRUtils::get_string_type(ASRUtils::expr_type(x->m_arg))->m_physical_type;
+                if (physical == x->m_new) {
+                    *current_expr = x->m_arg;
+                } else if (physical != x->m_old) {
+                    *current_expr = ASRUtils::create_string_physical_cast(al,
+                        x->m_arg, x->m_new, ASRUtils::is_allocatable(x->m_type));
+                }
+            }
+        };
+
+        void normalize_string_physical_casts(Allocator &al, ASR::TranslationUnit_t &unit) {
+            NormalizeStringPhysicalCasts casts(al);
+            casts.visit_TranslationUnit(unit);
+        }
+
+        void verify_pass_invariant(const ASR::TranslationUnit_t &unit,
+                const PassOptions &pass_options,
+                const ASRVerifyOptions &verify_options,
+                const std::string &pass_name) {
+            bool verify = pass_options.verify_all_passes;
+#if defined(WITH_LFORTRAN_ASSERT)
+            verify = true;
+#endif
+            if (!verify) return;
+            diag::Diagnostics local_diagnostics;
+            diag::Diagnostics &diagnostics = pass_options.diagnostics != nullptr
+                ? *pass_options.diagnostics : local_diagnostics;
+            if (!asr_verify(unit, verify_options, diagnostics)) {
+                std::cerr << diagnostics.render2();
+                throw LCompilersException("pass=" + pass_name,
+                    LFORTRAN_ASR_PASS_VERIFY_FAILED);
+            }
+        }
+
+        void make_new_tu_functions_private(ASR::TranslationUnit_t &unit,
+                const std::function<void()> &instantiate) {
+            std::set<std::string> existing_symbols;
+            for (auto &item: unit.m_symtab->get_scope()) {
+                existing_symbols.insert(item.first);
+            }
+            instantiate();
+            for (auto &item: unit.m_symtab->get_scope()) {
+                if (existing_symbols.find(item.first) == existing_symbols.end()
+                        && ASR::is_a<ASR::Function_t>(*item.second)) {
+                    ASR::down_cast<ASR::Function_t>(item.second)->m_access =
+                        ASR::accessType::Private;
+                }
+            }
+        }
 
         void get_dim_rank(ASR::ttype_t* x_type, ASR::dimension_t*& m_dims, int& n_dims) {
             ASR::ttype_t* t2 = ASRUtils::type_get_past_allocatable(
@@ -17,7 +83,7 @@ namespace LCompilers {
             switch( t2->type ) {
                 case ASR::ttypeType::Array: {
                     ASR::Array_t* array_t = ASR::down_cast<ASR::Array_t>(t2);
-                    n_dims = array_t->n_dims;
+                    n_dims = checked_integer_cast<int>(array_t->n_dims);
                     m_dims = array_t->m_dims;
                     break ;
                 }
@@ -407,7 +473,7 @@ namespace LCompilers {
             }
             return false;
         }
-        ASR::expr_t* create_var(int counter, std::string suffix, const Location& loc,
+        ASR::expr_t* create_var(int64_t counter, std::string suffix, const Location& loc,
                             ASR::ttype_t* var_type, Allocator& al, SymbolTable*& current_scope, ASR::expr_t* var) {
             ASR::dimension_t* m_dims = nullptr;
             int ndims = 0;
@@ -453,7 +519,7 @@ namespace LCompilers {
             return idx_var;
         }
 
-        ASR::expr_t* create_var(int counter, std::string suffix, const Location& loc,
+        ASR::expr_t* create_var(int64_t counter, std::string suffix, const Location& loc,
                                 ASR::expr_t* sibling, Allocator& al, SymbolTable*& current_scope) {
             ASR::ttype_t* var_type = nullptr;
             var_type = get_matching_type(sibling, al);
@@ -595,7 +661,7 @@ namespace LCompilers {
                 }
                 idx_vars.push_back(al, var);
                 loop_vars.push_back(al, var);
-                loop_var_indices.push_back(i);
+                loop_var_indices.push_back(checked_integer_cast<int>(i));
             }
         }
 
@@ -685,7 +751,7 @@ namespace LCompilers {
             }
             a_realloc_lhs = a_realloc_lhs && is_allocatable;
             return ASR::make_Assignment_t(al, a_loc, a_target, a_value,
-                a_overloaded, a_realloc_lhs, false);
+                a_overloaded, a_realloc_lhs, false, false, false);
         }
 
         ASR::stmt_t* create_do_loop_helper_count(Allocator &al, const Location &loc, std::vector<ASR::expr_t*> do_loop_variables, ASR::expr_t* mask, ASR::expr_t* res, int curr_idx) {
@@ -845,6 +911,101 @@ namespace LCompilers {
             }
             ASR::expr_t* dim = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, loc, n_dims, ASRUtils::TYPE(ASR::make_Integer_t(al, loc, 4))));
             return b.Mul(b.ArraySize(array, dim, ASRUtils::TYPE(ASR::make_Integer_t(al, loc, 4))), create_array_size_pack(al, loc, array, n_dims-1));
+        }
+
+        // The integer(4) extent of `array` in dimension `dim` (0-based). A
+        // constructor is not evaluated for it: its type has its size.
+        static ASR::expr_t* array_extent(Allocator &al, ASR::expr_t* array,
+                ASR::dimension_t* dims, size_t dim) {
+            ASRUtils::ExprStmtDuplicator duplicator(al);
+            if (ASR::is_a<ASR::ArrayConstructor_t>(*array)) {
+                return duplicator.duplicate_expr(dims[dim].m_length);
+            }
+            const Location &loc = array->base.loc;
+            ASR::ttype_t* int32_type = ASRUtils::TYPE(ASR::make_Integer_t(al, loc, 4));
+            return ASRUtils::EXPR(ASR::make_ArraySize_t(al, loc,
+                duplicator.duplicate_expr(array),
+                ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, loc, dim + 1, int32_type)),
+                int32_type, nullptr));
+        }
+
+        // Adds to `checks` the comparison of the extents of arrays `left`
+        // and `right` (numbered as in array_extent_check) in every dimension
+        // that both have, except where their extents are compile-time
+        // constants and equal, so that the comparison cannot fail.
+        static void add_extent_checks(Allocator &al, Vec<ASR::array_extent_check_t>& checks,
+                int64_t left, ASR::expr_t* left_array,
+                int64_t right, ASR::expr_t* right_array) {
+            ASR::dimension_t* left_dims = nullptr;
+            size_t left_rank = ASRUtils::extract_dimensions_from_ttype(
+                ASRUtils::expr_type(left_array), left_dims);
+            ASR::dimension_t* right_dims = nullptr;
+            size_t right_rank = ASRUtils::extract_dimensions_from_ttype(
+                ASRUtils::expr_type(right_array), right_dims);
+            for (size_t dim = 0; dim < std::min(left_rank, right_rank); dim++) {
+                int64_t left_length = 0, right_length = 0;
+                if (left_dims[dim].m_length != nullptr &&
+                        right_dims[dim].m_length != nullptr &&
+                        ASRUtils::extract_value(left_dims[dim].m_length, left_length) &&
+                        ASRUtils::extract_value(right_dims[dim].m_length, right_length) &&
+                        left_length == right_length) {
+                    continue;
+                }
+                ASR::array_extent_check_t check;
+                check.loc = left_array->base.loc;
+                check.m_left = left;
+                check.m_right = right;
+                check.m_dim = dim + 1;
+                check.m_left_extent = array_extent(al, left_array, left_dims, dim);
+                check.m_right_extent = array_extent(al, right_array, right_dims, dim);
+                checks.push_back(al, check);
+            }
+        }
+
+        ASR::stmt_t* make_DebugCheckArrayBounds(Allocator &al, const Location &loc,
+                ASR::expr_t* target, Vec<ASR::expr_t*>& components, bool move_allocation) {
+            LCOMPILERS_ASSERT(components.size() > 0);
+            Vec<ASR::array_extent_check_t> checks;
+            checks.reserve(al, components.size());
+            // Each operand has the shape of the next one in every dimension,
+            // when they have the same rank
+            for (size_t i = 0; i + 1 < components.size(); i++) {
+                if (ASRUtils::extract_n_dims_from_ttype(ASRUtils::expr_type(components[i])) ==
+                        ASRUtils::extract_n_dims_from_ttype(ASRUtils::expr_type(components[i + 1]))) {
+                    add_extent_checks(al, checks, i + 1, components[i],
+                        i + 2, components[i + 1]);
+                }
+            }
+            // and the first operand has the shape of the target
+            add_extent_checks(al, checks, 0, target, 1, components[0]);
+            return ASRUtils::STMT(ASR::make_DebugCheckArrayBounds_t(al, loc,
+                target, components.p, components.size(), checks.p, checks.size(),
+                move_allocation));
+        }
+
+        ASR::expr_t* make_shape_differs(Allocator &al, const Location &loc,
+                const ASR::alloc_arg_t& alloc_arg, ASR::ttype_t* idx_type) {
+            ASRUtils::ASRBuilder b(al, loc);
+            ASRUtils::ExprStmtDuplicator d(al);
+            int idx_kind = ASRUtils::extract_kind_from_ttype_t(idx_type);
+            ASR::expr_t* shape_differs = nullptr;
+            for (size_t i = 0; i < alloc_arg.n_dims; i++) {
+                ASR::expr_t* length = d.duplicate_expr(alloc_arg.m_dims[i].m_length);
+                if (ASRUtils::extract_kind_from_ttype_t(ASRUtils::expr_type(length))
+                        != idx_kind) {
+                    length = b.i2i_t(length, idx_type);
+                }
+                ASR::expr_t* dim_differs = b.NotEq(b.ArraySize(
+                    d.duplicate_expr(alloc_arg.m_a), b.i_t(i + 1, idx_type),
+                    idx_type), length);
+                shape_differs = shape_differs == nullptr ? dim_differs
+                    : b.Or(shape_differs, dim_differs);
+            }
+            if (shape_differs == nullptr) {
+                shape_differs = b.bool_t(false, ASRUtils::TYPE(
+                    ASR::make_Logical_t(al, loc, 4)));
+            }
+            return shape_differs;
         }
 
         ASR::stmt_t* create_do_loop_helper_unpack(Allocator &al, const Location &loc, std::vector<ASR::expr_t*> do_loop_variables, ASR::expr_t* vector, ASR::expr_t* mask, ASR::expr_t* res, ASR::expr_t* idx, int curr_idx) {
@@ -1052,10 +1213,10 @@ namespace LCompilers {
             }
         }
 
-        ASR::expr_t* get_bound(ASR::expr_t* arr_expr, int dim, std::string bound, Allocator& al, int integer_kind) {
+        ASR::expr_t* get_bound(ASR::expr_t* arr_expr, int64_t dim, std::string bound, Allocator& al, int integer_kind) {
             ASR::ttype_t* x_mv_type = ASRUtils::expr_type(arr_expr);
             ASR::dimension_t* m_dims;
-            int n_dims = ASRUtils::extract_dimensions_from_ttype(x_mv_type, m_dims);
+            int n_dims = checked_integer_cast<int>(ASRUtils::extract_dimensions_from_ttype(x_mv_type, m_dims));
             bool is_data_only_array = ASRUtils::is_fixed_size_array(m_dims, n_dims) && ASRUtils::get_asr_owner(arr_expr) &&
                                     ASR::is_a<ASR::Struct_t>(*ASRUtils::get_asr_owner(arr_expr));
             ASR::ttype_t* int_type = ASRUtils::TYPE(ASR::make_Integer_t(al, arr_expr->base.loc, integer_kind));
@@ -1203,6 +1364,151 @@ namespace LCompilers {
                 throw LCompilersException("Symbol with " + name + " is already present in " + std::to_string(current_scope->counter));
             }
             return ASRUtils::EXPR(ASR::make_Var_t(al, loc, ASR::down_cast<ASR::symbol_t>(expr_sym)));
+        }
+
+        // Whether `x` is a variable, or a component of a scalar one, which
+        // is read without side effects, e.g. an array whose bounds an
+        // inquiry reads. With `through_components`, the scalar may also be
+        // an element of an array selected with reevaluable subscripts (see
+        // is_reevaluable_integer_expr), as in `net%layers(k)%w`. With
+        // `non_pointer`, no variable or component on the way is a pointer.
+        static bool is_reevaluable_designator(ASR::expr_t* x,
+                bool through_components, bool non_pointer) {
+            if (through_components) {
+                x = ASRUtils::get_past_array_physical_cast(x);
+            }
+            switch (x->type) {
+                case ASR::exprType::Var: {
+                    ASR::symbol_t* sym = ASRUtils::symbol_get_past_external(
+                        ASR::down_cast<ASR::Var_t>(x)->m_v);
+                    return !non_pointer || (ASR::is_a<ASR::Variable_t>(*sym) &&
+                        !ASRUtils::is_pointer(ASRUtils::symbol_type(sym)));
+                }
+                case ASR::exprType::StructInstanceMember: {
+                    ASR::StructInstanceMember_t* member =
+                        ASR::down_cast<ASR::StructInstanceMember_t>(x);
+                    ASR::expr_t* base = through_components ?
+                        ASRUtils::get_past_array_physical_cast(member->m_v) : member->m_v;
+                    if (non_pointer && ASRUtils::is_pointer(ASRUtils::symbol_type(
+                            ASRUtils::symbol_get_past_external(member->m_m)))) {
+                        return false;
+                    }
+                    return !ASRUtils::is_array(ASRUtils::expr_type(base)) &&
+                        is_reevaluable_designator(base, through_components, non_pointer);
+                }
+                case ASR::exprType::ArrayItem: {
+                    ASR::ArrayItem_t* item = ASR::down_cast<ASR::ArrayItem_t>(x);
+                    if (!through_components || ASRUtils::is_array(item->m_type)) {
+                        return false;
+                    }
+                    for (size_t i = 0; i < item->n_args; i++) {
+                        if (item->m_args[i].m_left || item->m_args[i].m_step ||
+                                !item->m_args[i].m_right ||
+                                !is_reevaluable_integer_expr(item->m_args[i].m_right, true)) {
+                            return false;
+                        }
+                    }
+                    return is_reevaluable_designator(item->m_v, true, non_pointer);
+                }
+                default: {
+                    return false;
+                }
+            }
+        }
+
+        // Whether the scalar integer `expr` is an expression of constants,
+        // variables, and bounds and sizes of arrays, which has no side
+        // effects, so that evaluating it again, with no assignment to a
+        // variable it references in between, gives the same value. With
+        // `through_components`, it may also reference integer components
+        // and elements of scalars, reached through no pointer, as in
+        // `self%start_index` or `s%t(k)%n`, and bounds of components of
+        // such elements, as in `ubound(net%layers(k)%w, 1)`.
+        bool is_reevaluable_integer_expr(ASR::expr_t* expr, bool through_components) {
+            if (!ASR::is_a<ASR::Integer_t>(*ASRUtils::expr_type(expr))) {
+                return false;
+            }
+            if (ASRUtils::is_value_constant(ASRUtils::expr_value(expr))) {
+                return true;
+            }
+            switch (expr->type) {
+                case ASR::exprType::Var: {
+                    return ASR::is_a<ASR::Variable_t>(*ASRUtils::symbol_get_past_external(
+                        ASR::down_cast<ASR::Var_t>(expr)->m_v));
+                }
+                case ASR::exprType::StructInstanceMember: {
+                    return through_components &&
+                        is_reevaluable_designator(expr, true, true);
+                }
+                case ASR::exprType::IntegerBinOp: {
+                    ASR::IntegerBinOp_t* binop = ASR::down_cast<ASR::IntegerBinOp_t>(expr);
+                    return is_reevaluable_integer_expr(binop->m_left, through_components) &&
+                        is_reevaluable_integer_expr(binop->m_right, through_components);
+                }
+                case ASR::exprType::IntegerUnaryMinus: {
+                    return is_reevaluable_integer_expr(
+                        ASR::down_cast<ASR::IntegerUnaryMinus_t>(expr)->m_arg, through_components);
+                }
+                case ASR::exprType::Cast: {
+                    ASR::Cast_t* cast = ASR::down_cast<ASR::Cast_t>(expr);
+                    return cast->m_kind == ASR::cast_kindType::IntegerToInteger &&
+                        is_reevaluable_integer_expr(cast->m_arg, through_components);
+                }
+                case ASR::exprType::ArrayBound: {
+                    ASR::ArrayBound_t* bound = ASR::down_cast<ASR::ArrayBound_t>(expr);
+                    return is_reevaluable_designator(bound->m_v, through_components, false) &&
+                        (bound->m_dim == nullptr ||
+                         is_reevaluable_integer_expr(bound->m_dim, through_components));
+                }
+                case ASR::exprType::ArraySize: {
+                    ASR::ArraySize_t* size = ASR::down_cast<ASR::ArraySize_t>(expr);
+                    return is_reevaluable_designator(size->m_v, through_components, false) &&
+                        (size->m_dim == nullptr ||
+                         is_reevaluable_integer_expr(size->m_dim, through_components));
+                }
+                default: {
+                    return false;
+                }
+            }
+        }
+
+        // A non-empty rank one constant, which can be named as a named
+        // constant (parameter); backends keep that as static data.
+        bool is_nameable_array_constant(ASR::ArrayConstant_t* x) {
+            return ASRUtils::extract_n_dims_from_ttype(x->m_type) == 1 &&
+                ASRUtils::get_fixed_size_of_array(x->m_type) > 0;
+        }
+
+        ASR::expr_t* create_named_array_constant(Allocator& al,
+                ASR::ArrayConstant_t* x, SymbolTable* current_scope) {
+            const Location& loc = x->base.base.loc;
+            std::string name = current_scope->get_unique_name("__libasr_array_constant_");
+            // The constant may be typed as a descriptor array without a
+            // lower bound (e.g. the value of an assignment to an
+            // allocatable target); a named constant is a fixed size array
+            // with lower bound 1, like one declared in the source.
+            ASR::ttype_t* index_type = ASRUtils::TYPE(ASR::make_Integer_t(al, loc, 4));
+            Vec<ASR::dimension_t> dims;
+            dims.reserve(al, 1);
+            ASR::dimension_t dim;
+            dim.loc = loc;
+            dim.m_start = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, loc, 1, index_type));
+            dim.m_length = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, loc,
+                ASRUtils::get_fixed_size_of_array(x->m_type), index_type));
+            dims.push_back(al, dim);
+            ASR::ttype_t* type = ASRUtils::duplicate_type(al,
+                ASRUtils::type_get_past_allocatable(x->m_type), &dims,
+                ASR::array_physical_typeType::FixedSizeArray, true);
+            ASR::expr_t* value = ASRUtils::EXPR(ASR::make_ArrayConstant_t(al, loc,
+                x->m_n_data, x->m_data, type, x->m_storage_format));
+            ASR::symbol_t* constant = ASR::down_cast<ASR::symbol_t>(
+                ASRUtils::make_Variable_t_util(al, loc, current_scope, s2c(al, name),
+                    nullptr, 0, ASR::intentType::Local, value, value,
+                    ASR::storage_typeType::Parameter, ASRUtils::duplicate_type(al, type),
+                    nullptr, ASR::abiType::Source, ASR::accessType::Public,
+                    ASR::presenceType::Required, false));
+            current_scope->add_symbol(name, constant);
+            return ASRUtils::EXPR(ASR::make_Var_t(al, loc, constant));
         }
 
         ASR::expr_t* get_fma(ASR::expr_t* arg0, ASR::expr_t* arg1, ASR::expr_t* arg2,
@@ -1487,7 +1793,8 @@ namespace LCompilers {
 
         Vec<ASR::stmt_t*> replace_doloop(Allocator &al, const ASR::DoLoop_t &loop,
                                          int comp, bool use_loop_variable_after_loop,
-                                         SymbolTable* current_scope) {
+                                         SymbolTable* current_scope,
+                                         bool exact_unit_step_exit) {
             Location loc = loop.base.base.loc;
             ASR::expr_t *a=loop.m_head.m_start;
             ASR::expr_t *b=loop.m_head.m_end;
@@ -1497,6 +1804,7 @@ namespace LCompilers {
             ASR::stmt_t *inc_stmt = nullptr;
             ASR::stmt_t *loop_init_stmt = nullptr;
             ASR::stmt_t *stmt_add_c_after_loop = nullptr;
+            ASR::expr_t *zero_trip_guard = nullptr;
             Vec<ASR::stmt_t*> pre_loop_stmts;
             pre_loop_stmts.reserve(al, 2);
             if( !loop_var && a && current_scope ) {
@@ -1564,7 +1872,7 @@ namespace LCompilers {
                 ASR::cmpopType cmp_op;
 
                 if( comp == -1 ) {
-                    int increment;
+                    int64_t increment;
                     bool not_constant_inc = false;
                     if (!ASRUtils::is_integer(*ASRUtils::expr_type(c))) {
                         throw LCompilersException("Do loop increment type should be an integer");
@@ -1631,6 +1939,59 @@ namespace LCompilers {
                     } else {
                         cmp_op = ASR::cmpopType::GtE;
                     }
+                    // With --fast, give a unit-step loop (c = 1 or c = -1)
+                    // an exit test from which LLVM can compute the trip
+                    // count of a loop with run-time bounds (it cannot from
+                    // `i + c <= b`, which never becomes false for
+                    // b = huge(i)), so that it can vectorize the loop:
+                    // * a is a constant other than -huge(i)-1 (huge(i) for
+                    //   c = -1), so `i = a - c` does not wrap:
+                    //       i = a - c
+                    //       do while (i < b)        ! (i > b for c = -1)
+                    //           i = i + c
+                    // * otherwise:
+                    //       i = a - c
+                    //       if (i + c <= b) then    ! (>= for c = -1)
+                    //           do while (i /= b)
+                    //               i = i + c
+                    //   The guard is the first `i + c <= b` test, which
+                    //   holds exactly when a <= b, even if `a - c` wrapped.
+                    //   Only a loop over the whole range of the kind, whose
+                    //   iteration count is not representable, differs.
+                    // In both forms the DO variable takes the values a, ...,
+                    // b, the loop runs |b - a| + 1 times (also for
+                    // b = huge(i)), and `i + c` in the body never wraps.
+                    if (!not_constant_inc && exact_unit_step_exit &&
+                            current_scope && loop.n_orelse == 0 &&
+                            (increment == 1 || increment == -1)) {
+                        ASR::ttype_t *log_type = ASRUtils::TYPE(
+                            ASR::make_Logical_t(al, loc, 4));
+                        int a_kind = ASRUtils::extract_kind_from_ttype_t(
+                            ASRUtils::expr_type(loop_var));
+                        int64_t first = 0;
+                        int64_t max_value = a_kind <= 8 ? (int64_t)(
+                            ((uint64_t)1 << (8 * a_kind - 1)) - 1) : 0;
+                        bool a_minus_c_wraps = a_kind > 8
+                            || !ASRUtils::extract_value(
+                                ASRUtils::expr_value(a), first)
+                            || first < -max_value || first > max_value
+                            || (increment == -1 && first == max_value);
+                        if (a_minus_c_wraps) {
+                            ASR::ttype_t *int_type = ASRUtils::TYPE(
+                                ASR::make_Integer_t(al, loc, a_kind));
+                            zero_trip_guard = ASRUtils::EXPR(
+                                ASR::make_IntegerCompare_t(al, loc,
+                                ASRUtils::EXPR(ASR::make_IntegerBinOp_t(al, loc,
+                                loop_var, ASR::binopType::Add, c, int_type,
+                                nullptr)), cmp_op, b, log_type, nullptr));
+                        }
+                        ASR::cmpopType exit_op = a_minus_c_wraps
+                            ? ASR::cmpopType::NotEq
+                            : (increment == 1 ? ASR::cmpopType::Lt
+                                              : ASR::cmpopType::Gt);
+                        cond = ASRUtils::EXPR(ASR::make_IntegerCompare_t(al, loc,
+                            loop_var, exit_op, b, log_type, nullptr));
+                    }
                 } else {
                     cmp_op = (ASR::cmpopType) comp;
                 }
@@ -1676,6 +2037,13 @@ namespace LCompilers {
 
             ASR::stmt_t *while_loop_stmt = ASRUtils::STMT(ASR::make_WhileLoop_t(al, loc,
                 loop.m_name, cond, body.p, body.size(), loop.m_orelse, loop.n_orelse));
+            if (zero_trip_guard) {
+                Vec<ASR::stmt_t*> guarded;
+                guarded.reserve(al, 1);
+                guarded.push_back(al, while_loop_stmt);
+                while_loop_stmt = ASRUtils::STMT(ASR::make_If_t(al, loc, nullptr,
+                    zero_trip_guard, guarded.p, guarded.n, nullptr, 0));
+            }
             Vec<ASR::stmt_t*> result;
             result.reserve(al, 2 + pre_loop_stmts.size());
             for (size_t i = 0; i < pre_loop_stmts.size(); i++) {
@@ -1726,15 +2094,15 @@ namespace LCompilers {
             const Location& loc = arr_var->base.loc;
             ASRUtils::ASRBuilder b(al, loc);
             ASR::dimension_t* m_dims;
-            int n_dims = ASRUtils::extract_dimensions_from_ttype(ASRUtils::expr_type(arr_var), m_dims);
+            int n_dims = checked_integer_cast<int>(ASRUtils::extract_dimensions_from_ttype(ASRUtils::expr_type(arr_var), m_dims));
             // For pointer/equivalence variables the variable type may have empty
             // dimensions (e.g. [(() ())]).  In that case fall back to the
             // ArrayConstant's own type which carries concrete bounds.
             bool use_x_dims = (n_dims > 0 && (m_dims[0].m_length == nullptr));
             if( use_x_dims ) {
-                n_dims = ASRUtils::extract_dimensions_from_ttype(x->m_type, m_dims);
+                n_dims = checked_integer_cast<int>(ASRUtils::extract_dimensions_from_ttype(x->m_type, m_dims));
             }
-            Vec<int> strides;
+            Vec<int64_t> strides;
             strides.resize(al, n_dims);
             // compute stride vars for each dimension in column major order
             strides.p[0] = 1;
@@ -1959,8 +2327,7 @@ namespace LCompilers {
                              ASR::is_a<ASR::RealBinOp_t>(*curr_init)) ) {
                             dimension.m_length = nullptr;
                         } else {
-                            ASR::expr_t* curr_init_array_size_for_type = ASRUtils::get_size(curr_init, al, true);
-                            dimension.m_length = curr_init_array_size_for_type;
+                            dimension.m_length = get_constructor_section_extent_for_type(curr_init, al);
                         }
                         Vec<ASR::dimension_t> dims; dims.reserve(al, 1);
                         dims.push_back(al, dimension);

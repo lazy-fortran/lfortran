@@ -39,6 +39,12 @@ set(CWRAPPER_SRC
       fortran_kernel.cpp
     )
   endif()
+  # The Jupyter client and, without Xeus, the built-in Jupyter kernel
+  if (WITH_LLVM)
+    set(SRC ${SRC}
+      jupyter.cpp
+    )
+  endif()
   # For WASM build, fortran_kernel.cpp is compiled directly into the xlfortran
   # executable (not into lfortran_lib) to avoid duplicate symbols and to prevent
   # xeus/embind undefined refs from bleeding into other WASM targets.
@@ -54,6 +60,17 @@ target_link_libraries(lfortran_parser_obj PUBLIC lfortran_utils)
 target_include_directories(lfortran_parser_obj PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
 target_include_directories(lfortran_parser_obj BEFORE PUBLIC ${lfortran_SOURCE_DIR}/src)
 target_include_directories(lfortran_parser_obj BEFORE PUBLIC ${lfortran_BINARY_DIR}/src)
+if (MSVC)
+    # The Bison 3.0 GLR skeleton used on Windows (m2-bison) passes a size_t
+    # rule length to an int parameter in yyuserAction (C4267) and emits a
+    # default-only switch in yyuserMerge (C4065). Both are in skeleton code,
+    # not in parser.yy, and cannot be fixed in the grammar or scoped with
+    # pragmas, as the grammar actions are emitted inside yyuserAction. Only
+    # these two warnings are disabled, for this generated file only; other
+    # diagnostics (e.g. C4244 narrowing) in parser.yy actions stay enabled.
+    set_source_files_properties(parser/parser.tab.cc PROPERTIES
+        COMPILE_OPTIONS "/wd4065;/wd4267")
+endif()
 
 # Standalone parser library for external use
 add_library(lfortran_parser $<TARGET_OBJECTS:lfortran_parser_obj> $<TARGET_OBJECTS:lfortran_utils>)
@@ -80,6 +97,9 @@ if (WITH_LIBUNWIND)
 endif()
 if (WITH_XEUS)
     target_link_libraries(lfortran_lib xeus xeus-zmq)
+endif()
+if (WITH_LLVM AND WIN32)
+    target_link_libraries(lfortran_lib ws2_32)
 endif()
 if (XEUS_LFORTRAN_WASM_BUILD)
     target_link_libraries(lfortran_lib xeus-static)
