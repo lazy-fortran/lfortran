@@ -140,7 +140,7 @@ def assignment(table, name, value, realloc=False, move=False):
     return (
         f"(Assignment :target {var(table, name)} :value {value} "
         f":overloaded nil :realloc_lhs {'true' if realloc else 'false'} "
-        f":move_allocation {'true' if move else 'false'})"
+        f":move_allocation {'true' if move else 'false'} :new_target false :new_allocation false)"
     )
 
 
@@ -170,7 +170,7 @@ def array_item(table, name, indices, element):
         for index in indices)
     return (
         f"(ArrayItem :v {var(table, name)} :args [{entries}] "
-        f":type {type_of(element)} :storage_format :ColMajor :value nil)"
+        f":type {type_of(element)} :storage_format :ColMajor :value nil :in_bounds false)"
     )
 
 
@@ -195,8 +195,8 @@ def variable(table, name, declaration, intent="Local", presence="Required",
         f":abi :Source :access :Public "
         f":presence :{presence} :value_attr false :target_attr false "
         f":contiguous_attr false :bindc_name nil :is_volatile false "
-        f":is_protected false :pass_attr :NotMethod :self_argument nil "
-        f":codims [])"
+        f":is_asynchronous false :is_protected false :pass_attr :NotMethod :self_argument nil "
+        f":codims [] :common_block nil)"
     )
 
 
@@ -621,7 +621,8 @@ def generate_valid(seed):
         return (
             f"(Assignment :target {target} "
             f":value {element_expression(element)} "
-            f":overloaded nil :realloc_lhs false :move_allocation false)"
+            f":overloaded nil :realloc_lhs false :move_allocation false "
+            f":new_target false :new_allocation false)"
         )
 
     def array_read_statement():
@@ -1589,7 +1590,7 @@ def invalid_procedure_pointer_association(_rng):
             OO_PROGRAM_SYMTAB, "impl", MODULE_SYMTAB, "impl", "m"),
          "p1": variable(OO_PROGRAM_SYMTAB, "p1", pointer_type)},
         [f"(Associate :target {var(OO_PROGRAM_SYMTAB, 'p1')} "
-         f":value {var(OO_PROGRAM_SYMTAB, 'impl')})"],
+         f":value {var(OO_PROGRAM_SYMTAB, 'impl')} :form :NoPointerBounds)"],
     ), "schema-invalid procedure pointer association"
 
 
@@ -1711,7 +1712,7 @@ def invalid_array_constructor_element(_rng):
         {"a": variable(PROGRAM_SYMTAB, "a", element)},
         [f"(Assignment :target {var(PROGRAM_SYMTAB, 'a')} "
          f":value {constructor} :overloaded nil :realloc_lhs false "
-         f":move_allocation false)"],
+         f":move_allocation false :new_target false :new_allocation false)"],
     ), "schema-invalid array constructor element type"
 
 

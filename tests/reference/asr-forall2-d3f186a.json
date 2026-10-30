@@ -1,0 +1,13 @@
+{
+    "basename": "asr-forall2-d3f186a",
+    "cmd": "lfortran --show-asr --no-color {infile} -o {outfile}",
+    "infile": "tests/forall2.f90",
+    "infile_hash": "d03501e8f36161f00710cf67b4e919e53a4d189347e453107a1ef965",
+    "outfile": null,
+    "outfile_hash": null,
+    "stdout": "asr-forall2-d3f186a.stdout",
+    "stdout_hash": "8e56adf589f9c8b9611063b7d8522c5b45993fb3ab88bbe94d00ecbd",
+    "stderr": null,
+    "stderr_hash": null,
+    "returncode": 0
+}

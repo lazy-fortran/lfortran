@@ -6,38 +6,77 @@ on:
       - main
     tags:
       - 'v*'
-  pull_request:
-    types: [opened, reopened, synchronize, labeled, unlabeled]
-    branches:
-      - main
-
-# For a PR #7488 against main branch, the `group` will become: CI-{{ 7488 || github.sha }}
-# which eventually evaluates to: CI-7488 and 'sha' isn't used.
-# NOTE: `||` acts as a logical OR and a default operator both,
-# see: https://docs.github.com/en/actions/learn-github-actions/expressions#operators.
-# When it isn't a PR against main but instead a commit pushed (or merged) to main, then `group` will
-# evaluate to `${{ github.sha }}` but "cancel-in-progress" evaluates to false, so the CI on main
-# will run in a new group `${{ github.sha }}`, but no previous CI will be cancelled on main
+  # Exhaustive never runs on PRs. For a rare, explicitly requested check of a
+  # PR, dispatch this workflow on the PR branch in a fork (see
+  # doc/src/installation.md).
+  workflow_dispatch:
   merge_group:
+
+# Main pushes share one group: a running main run is never cancelled, and a
+# newer push replaces the pending one, so the latest main is always tested.
+# Tags and manual runs stay independent per commit.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || github.sha }}
+  cancel-in-progress: false
 
 
 env:
   MACOSX_DEPLOYMENT_TARGET: 15.0
 
 jobs:
+  compatibility:
+    name: Extended compiler checks
+    uses: ./.github/workflows/Compiler-Compatibility-CI.yml
+    with:
+      scope: exhaustive
+
+  platform:
+    name: Full platform coverage (OS=${{ matrix.os }}, LLVM=${{ matrix.llvm-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ contains(matrix.os, 'macos') && 130 || 60 }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: 26.0
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            llvm-version: "11"
+          - os: ubuntu-latest
+            llvm-version: "11"
+          - os: ubuntu-latest
+            llvm-version: "21"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Build platform compiler
+        uses: ./.github/actions/build-platform
+        with:
+          os: ${{ matrix.os }}
+          llvm-version: ${{ matrix.llvm-version }}
+          # Quick saves this cache. A second ~1.5 GB copy per platform pushed
+          # the repository over its 10 GB cache limit and evicted other caches.
+          save-cache: 'false'
+
+      - name: Test full platform coverage
+        shell: bash -e -l {0}
+        run: |
+            export PATH="$(pwd)/src/bin:$PATH"
+            export LFORTRAN_LLVM_VERSION="${{ matrix.llvm-version }}"
+            if [[ "${{ matrix.os }}" == *macos* ]]; then
+                export MACOS=1 NPROC=3
+                ./run_tests.py
+            else
+                export MACOS=0
+            fi
+            bash ci/test_llvm_integration.sh --platform
+
   debug_outOfSource:
     name: Check Out-of-Source Debug build
     runs-on: ubuntu-latest
-    # Merge queue, main and Tests::Run-Exhaustive PRs. Hosts option-combination
-    # tests moved out of Quick checks (llvm -sc, --detect-leaks, C++
-    # compiler build).
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' &&
-           contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,28 +93,29 @@ jobs:
       - uses: hendrikmuhs/ccache-action@main
         with:
           variant: sccache
-          key: ${{ github.job }}-${{ matrix.os }}
+          key: ${{ github.job }}-ubuntu-latest
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Linux
         shell: bash -e -l {0}
         run: |
-          ( cd src && ./build0.sh )
-          export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
-          cmake -S src -B builddir -GNinja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
-            -DWITH_LLVM=yes \
-            -DWITH_LSP=yes \
-            -DWITH_KOKKOS=yes \
-            -DLFORTRAN_BUILD_ALL=yes \
-            -DWITH_STACKTRACE=no \
-            -DWITH_RUNTIME_STACKTRACE=yes \
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            ( cd src && ./build0.sh )
+            export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
+            cmake -S src -B builddir -GNinja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
+              -DWITH_LLVM=yes \
+              -DWITH_LSP=yes \
+              -DWITH_KOKKOS=yes \
+              -DLFORTRAN_BUILD_ALL=yes \
+              -DWITH_STACKTRACE=no \
+              -DWITH_RUNTIME_STACKTRACE=yes \
+              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-          cmake --build builddir  -j16 --target install
+            cmake --build builddir  -j16 --target install
 
       - name: Test Linux
         shell: bash -e -l {0}
@@ -85,22 +125,25 @@ jobs:
       - name: Test option combinations
         shell: bash -e -l {0}
         run: |
-          export PATH="$(pwd)/inst/bin:$PATH"
-          NPROC=$(nproc)
-          cd src/integration_tests
-          ./run_tests.py -b llvm -sc -j${NPROC}
-          ./run_tests.py -b llvm_submodule -sc -j${NPROC}
-          ./run_tests.py -b llvm --detect-leaks -j${NPROC}
+            export PATH="$(pwd)/inst/bin:$PATH"
+            NPROC=$(nproc)
+            cd src/integration_tests
+            ./run_tests.py -b llvm -sc -j${NPROC}
+            ./run_tests.py -b llvm_submodule -sc -j${NPROC}
+            ./run_tests.py -b llvm --detect-leaks -j${NPROC}
 
       - name: Test C++ compiler build
         shell: bash -e -l {0}
         working-directory: src
         run: |
-          shell ci/test_cpp_version.sh
+            shell ci/test_cpp_version.sh
 
       - name: Test Moved Installation
         shell: bash -e -l {0}
         run: |
+          python3 src/ci/test_runtime_headers.py \
+            --source-dir src --build-dir builddir --install-prefix inst \
+            --kokkos-dir "$CONDA_PREFIX" --relocate
           mv inst inst.moved
           cp src/examples/expr2.f90 expr2.F90
           rm -rf src
@@ -114,12 +157,7 @@ jobs:
   release:
     name: Check Release build
     runs-on: ubuntu-latest
-    # Main and Tests::Run-Exhaustive PRs only. Hosts --std=f23 and
-    # llvm_single_invocation, moved out of Quick checks. llvm / llvm -f
-    # here also cover the Release build (Quick checks builds Debug).
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -135,55 +173,63 @@ jobs:
       - uses: hendrikmuhs/ccache-action@main
         with:
           variant: sccache
-          key: ${{ github.job }}-${{ matrix.os }}
+          key: ${{ github.job }}-ubuntu-latest
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Linux
         shell: bash -e -l {0}
         run: |
-          ./build0.sh
-          export CXXFLAGS="-Werror"
-          export CFLAGS="-Werror"
-          cmake . -GNinja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_LLVM=yes \
-            -DWITH_LSP=yes \
-            -DLFORTRAN_BUILD_ALL=yes \
-            -DWITH_STACKTRACE=no \
-            -DWITH_RUNTIME_STACKTRACE=yes \
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-            -DCMAKE_INSTALL_BINDIR=bin/tastic \
-            -DCMAKE_INSTALL_LIBDIR=oh/my/sweet/lib \
-            -DCMAKE_INSTALL_INCLUDEDIR=incl/O/Matic \
-            -DCMAKE_INSTALL_MANDIR=man/O/man \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            ./build0.sh
+            export CXXFLAGS="-Werror"
+            export CFLAGS="-Werror"
+            cmake . -GNinja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DWITH_LLVM=yes \
+              -DWITH_LSP=yes \
+              -DLFORTRAN_BUILD_ALL=yes \
+              -DWITH_STACKTRACE=no \
+              -DWITH_RUNTIME_STACKTRACE=yes \
+              -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+              -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
+              -DCMAKE_INSTALL_BINDIR=bin/tastic \
+              -DCMAKE_INSTALL_LIBDIR=oh/my/sweet/lib \
+              -DCMAKE_INSTALL_INCLUDEDIR=incl/O/Matic \
+              -DCMAKE_INSTALL_MANDIR=man/O/man \
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-          cmake --build . -j16 --target install
+            cmake --build . -j16 --target install
 
       - name: Test Linux
         shell: bash -e -l {0}
         run: |
-          ctest
-          ./run_tests.py
-          ./run_tests.py -vh
-          cd integration_tests
-          ./run_tests.py -m
-          NPROC=$(nproc)
-          ./run_tests.py -b llvm -j${NPROC}
-          ./run_tests.py -b llvm -f -j${NPROC}
-          ./run_tests.py -b llvm_single_invocation -j${NPROC}
-          ./run_tests.py -b llvm --std=f23 -j${NPROC}
-          ./run_tests.py -b llvm -f --std=f23 -j${NPROC}
+            ctest
+            ./run_tests.py
+            ./run_tests.py -vh
+            cd integration_tests
+            ./run_tests.py -m
+            NPROC=$(nproc)
+            ./run_tests.py -b llvm -j${NPROC}
+            ./run_tests.py -b llvm -f -j${NPROC}
+            ./run_tests.py -b llvm_single_invocation -j${NPROC}
+            ./run_tests.py -b llvm --std=f23 -j${NPROC}
+            ./run_tests.py -b llvm -f --std=f23 -j${NPROC}
 
       - name: Test Installation
         shell: bash -e -l {0}
         run: |
-          test -x inst/bin/tastic/lfortran
-          test -f inst/oh/my/sweet/lib/liblfortran_runtime_static.a
-          test -f inst/oh/my/sweet/lib/liblfortran_runtime.so
-          test -f inst/incl/O/Matic/lfortran/impure/lfortran_intrinsics.h
-          test -f inst/man/O/man/man1/lfortran.1
+            test -x inst/bin/tastic/lfortran
+            test -f inst/oh/my/sweet/lib/liblfortran_runtime_static.a
+            test -f inst/oh/my/sweet/lib/liblfortran_runtime.so
+            test -f inst/incl/O/Matic/lfortran/impure/lfortran_intrinsics.h
+            test -f inst/man/O/man/man1/lfortran.1
+
+      - name: Test Moved Build and Installation
+        shell: bash -e -l {0}
+        run: |
+            python3 ci/test_runtime_headers.py \
+              --source-dir . --build-dir . --install-prefix inst \
+              --install-bindir bin/tastic --kokkos-dir "$CONDA_PREFIX" --relocate
 
 
 # Commented out to save CI runners:
@@ -225,391 +271,10 @@ jobs:
 #          pixi run integration_tests
 #          pixi run clean
 
-  test_llvm:
-    name: Test LLVM ${{ matrix.llvm-version }} (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # Run for merge groups, main pushes, or specifically labeled PRs
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
-    strategy:
-      fail-fast: false
-      matrix:
-        # this is only run on ubuntu intentionally (except macOS LLVM 22)
-        os: ["ubuntu-latest"]
-        # Rotation: every LLVM version is tested on every push to main (i.e.
-        # on every merge), so a version-specific break is caught within one
-        # merge. On a pull request we test only the versions where breakage
-        # actually originates:
-        #   7  - oldest supported; integration tests (newer LLVM APIs)
-        #   11 - default version; third-party codes (full LAPACK)
-        #   19 - third-party codes (smoke, Release). WASM is a separate job.
-        #   23 - newest; integration tests (removed/deprecated LLVM APIs)
-        # llvm --fast now runs on Quick LLVM 11 for every PR, so LLVM 17 is
-        # main-only (with 8/10/15/18/21/22).
-        # Third-party codes exercise LFortran, not LLVM, so they run on two
-        # Ubuntu versions only. Every other Ubuntu version runs the LLVM
-        # integration-test option combinations instead. macOS LLVM 22 stays
-        # on third-party because Fiats/Formal Metal tests are Darwin-only.
-        llvm-version: "${{ github.event_name == 'push' && fromJSON('[\"7\",\"8\",\"10\",\"11\",\"15\",\"17\",\"18\",\"19\",\"21\",\"22\",\"23\"]') || fromJSON('[\"7\",\"11\",\"19\",\"23\"]') }}"
-        python-version: ["3.10"]
-        include:
-          - os: macos-latest
-            llvm-version: "22"
-            python-version: "3.10"
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      # Pin 7.0.1: the conda-forge llvmdev 7.1.0 build is compiled with a
-      # newer toolchain, and its static libraries crash at run time (in
-      # createX86MCSubtargetInfo) when linked with the runner's binutils 2.42.
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: matrix.llvm-version == '7'
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=7.0.1
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.6=hb85ec53_102
-            zstd-static=1.5.7
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '10')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            nodejs=18.20.2
-            openmpi=5.0.6=hb85ec53_102
-            zlib=1.3.1
-            zstd-static=1.5.6
-            xonsh=0.16.0
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '18')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            xonsh=0.16.0
-            zlib=1.3.1
-            zstd-static=1.5.6
-            openmpi=5.0.6=hb85ec53_102
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '20')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.6=hb85ec53_102
-            xonsh=0.16.0
-            zlib=1.3.1
-            zstd-static=1.5.7
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '21')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            llvmdev=21.1.0  python=${{ matrix.python-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.6=hb85ec53_102
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '22') && contains(matrix.os, 'ubuntu')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.10
-            binutils=2.45.1
-            zstd-static=1.5.7
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '23') && contains(matrix.os, 'ubuntu')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.10
-            binutils=2.45.1
-            zstd-static=1.5.7
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.os, 'macos')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment.yml
-          create-args: >-
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.10
-            zstd-static=1.5.7
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: contains(matrix.llvm-version, '12')
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.3
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        if: ${{! ( matrix.llvm-version == '7' || contains(matrix.llvm-version, '10') || contains(matrix.llvm-version, '12') || contains(matrix.llvm-version, '18') || contains(matrix.llvm-version, '20') || contains(matrix.llvm-version, '21') || contains(matrix.llvm-version, '22') || contains(matrix.llvm-version, '23') )}}
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=${{ matrix.python-version }}
-            llvmdev=${{ matrix.llvm-version }}
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            openmpi=5.0.6=hb85ec53_102
-
-      - uses: hendrikmuhs/ccache-action@main
-        with:
-          variant: sccache
-          key: ${{ github.job }}-${{ matrix.os }}-${{ matrix.llvm-version }}
-
-      - name: Install libunwind
-        if: matrix.llvm-version > 11 && contains(matrix.os, 'ubuntu')
-        run: micromamba install -y -n lf libunwind=1.7.2
-
-      - name: Build
-        shell: bash -e -l {0}
-        run: |
-          ./build0.sh
-          # Integration tests include EXTRA_ARGS -g (e.g. derived_types_123),
-          # which needs runtime stacktraces. Third-party jobs (LLVM 11/19 and
-          # macOS) must not enable it: Caffeine passes -g at link time and
-          # dwarf_convert.py then fails without llvm-dwarfdump.
-          STACKTRACE_FLAG=""
-          if [[ "${{ matrix.llvm-version }}" != "11" && "${{ matrix.llvm-version }}" != "19" && "${{ matrix.os }}" != *macos* ]]; then
-              STACKTRACE_FLAG="-DWITH_RUNTIME_STACKTRACE=yes"
-          fi
-          cmake . -GNinja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_FLAGS_RELEASE="-Wall -Wextra -O3 -funroll-loops -DNDEBUG" \
-            -DWITH_LLVM=yes \
-            -DWITH_LSP=yes \
-            -DLFORTRAN_BUILD_ALL=yes \
-            -DWITH_STACKTRACE=no \
-            ${STACKTRACE_FLAG} \
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-
-          cmake --build . -j16 --target install
-
-      - name: Test third party codes
-        shell: bash -e -l {0}
-        if: ${{ matrix.llvm-version == '11' || matrix.llvm-version == '19' || contains(matrix.os, 'macos') }}
-        run: |
-          export PATH="$(pwd)/src/bin:$PATH"
-          LAPACK_MODE="smoke"
-          # The full Reference-LAPACK suite costs ~10 min more than smoke.
-          # It exercises LFortran, not LLVM, so run it on the default
-          # version only. LLVM 19 and macOS stay on smoke.
-          if [[ "${{ matrix.llvm-version }}" == "11" ]]; then
-              LAPACK_MODE="full"
-          fi
-          echo "Running LAPACK third-party mode: ${LAPACK_MODE}"
-          RUNNER_OS="${{matrix.os}}" FC=lfortran ci/test_third_party_codes.sh --lapack-mode "${LAPACK_MODE}"
-
-      # The unit tests exercise the JIT, whose code path differs between
-      # LLVM versions, so run them for every version.
-      - name: Test unit tests
-        shell: bash -e -l {0}
-        run: ctest --output-on-failure
-
-      - name: Test LLVM integration tests
-        shell: bash -e -l {0}
-        if: ${{ matrix.llvm-version != '11' && matrix.llvm-version != '19' && !contains(matrix.os, 'macos') }}
-        run: |
-          export PATH="$(pwd)/src/bin:$PATH"
-          export LFORTRAN_LLVM_VERSION="${{ matrix.llvm-version }}"
-          bash ci/test_llvm_integration.sh
-
-      # Only where the build above left runtime stacktraces off. Caffeine
-      # links with -g, and with -DWITH_RUNTIME_STACKTRACE=yes that sends
-      # every link through dwarf_convert.py, which fails without
-      # llvm-dwarfdump. Those are the same entries that run the other
-      # third-party tests, for the same reason.
-      - name: Test coarray runtime with Caffeine
-        shell: bash -e -l {0}
-        if: ${{ matrix.llvm-version == '11' || matrix.llvm-version == '19' || contains(matrix.os, 'macos') }}
-        run: ci/test_caffeine.sh
-
-  test_llvm_wasm:
-    name: Test LLVM 19 WASM (ubuntu-latest)
-    runs-on: ubuntu-latest
-    # llvm_wasm / llvm_wasm_emcc need a Debug build with WITH_TARGET_WASM.
-    # Kept separate from Test LLVM 19 so third-party codes use a Release
-    # compiler. Same PR/main gating as the other LLVM version jobs.
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=3.10
-            llvmdev=19
-            bison=3.4
-            openblas=0.3.21
-            llvm-openmp=14.0.4
-            make=4.3
-            nodejs=18.20.4
-            openmpi=5.0.6=hb85ec53_102
-            xonsh=0.16.0
-            zlib=1.3.1
-            zstd-static=1.5.6
-
-      - uses: hendrikmuhs/ccache-action@main
-        with:
-          variant: sccache
-          key: ${{ github.job }}-ubuntu-latest-19
-
-      - name: Install libunwind
-        run: micromamba install -y -n lf libunwind=1.7.2
-
-      - name: Setup WASI SDK
-        shell: bash -e -l {0}
-        run: |
-          mkdir -p $HOME/ext
-          cd $HOME/ext
-          curl -o wasi-sdk.tar.gz -L https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-21/wasi-sdk-21.0-linux.tar.gz
-          tar -xvf wasi-sdk.tar.gz
-          mv wasi-sdk-21.0 wasi-sdk
-          export WASI_SDK_PATH=$HOME/ext/wasi-sdk
-          echo $WASI_SDK_PATH
-          $WASI_SDK_PATH/bin/clang --version
-
-      - name: Install wasmtime
-        shell: bash -e -l {0}
-        run: |
-          cd $HOME
-          curl -o wasmtime.tar.gz -L https://github.com/bytecodealliance/wasmtime/releases/download/v19.0.2/wasmtime-v19.0.2-x86_64-linux.tar.xz
-          tar -xvf wasmtime.tar.gz
-          export PATH=$HOME/wasmtime-v19.0.2-x86_64-linux:$PATH
-          wasmtime --version
-
-      - name: Setup Emscripten SDK
-        shell: bash -e -l {0}
-        run: |
-          mkdir -p $HOME/ext
-          cd $HOME/ext
-          curl -o emsdk.tar.gz -L https://github.com/emscripten-core/emsdk/archive/refs/tags/4.0.13.tar.gz
-          tar -xvf emsdk.tar.gz
-          mv emsdk-4.0.13 emsdk
-          export EMSDK_PATH=$HOME/ext/emsdk
-          echo $EMSDK_PATH
-          cd $EMSDK_PATH
-          ./emsdk install 3.1.35
-          ./emsdk activate 3.1.35
-
-      - name: Build Linux ( WASM )
-        shell: bash -e -l {0}
-        run: |
-          export WASI_SDK_PATH=$HOME/ext/wasi-sdk
-          export EMSDK_PATH=$HOME/ext/emsdk
-          export CXXFLAGS="-Werror -D_GLIBCXX_ASSERTIONS"
-          ./build0.sh
-          cmake . -GNinja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DWITH_LLVM=yes \
-            -DWITH_LSP=yes \
-            -DWITH_TARGET_WASM=yes \
-            -DLFORTRAN_BUILD_ALL=yes \
-            -DWITH_STACKTRACE=no \
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-
-          cmake --build . -j16 --target install
-
-      - name: Test unit tests
-        shell: bash -e -l {0}
-        run: ctest --output-on-failure
-
-      - name: Test Linux ( WASM )
-        shell: bash -e -l {0}
-        run: |
-          export WASI_SDK_PATH=$HOME/ext/wasi-sdk
-          export EMSDK_PATH=$HOME/ext/emsdk
-          export PATH=$HOME/wasmtime-v19.0.2-x86_64-linux:$PATH
-          export WASMTIME_NEW_CLI=0
-          cd integration_tests
-          ./run_tests.py -b llvm_wasm llvm_wasm_emcc
-
   upload_tarball:
     name: Upload Tarball
     runs-on: ubuntu-latest
-    # Run on push to main, or only when the specific label is modified on a PR
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -631,100 +296,17 @@ jobs:
           ci/create_source_tarball.sh $lfortran_version
 
       - name: Upload Tarball to Release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         shell: bash -e -l {0}
         run: |
           ci/upload_tarball_to_release.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  test_without_llvm:
-    name: Test without LLVM Backend
-    runs-on: ubuntu-latest
-    # Run for merge groups, main pushes, or specifically labeled PRs
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux.yml
-          create-args: >-
-            python=3.10
-
-      - name: Test
-        shell: bash -e -l {0}
-        run: |
-          shell ci/test_without_llvm_backend.sh
-
-  test_mlir:
-    name: Test MLIR backend
-    runs-on: ubuntu-latest
-    # Run for merge groups, main pushes, or specifically labeled PRs
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: mamba-org/setup-micromamba@v2.0.2
-        with:
-          micromamba-version: '2.0.4-0'
-          environment-file: ci/environment_linux_llvm.yml
-          create-args: >-
-            python=3.10
-            mlir=19.1.6
-            llvm=19.1.6
-            llvm-openmp=19.1.6
-            libunwind=1.7.2
-
-      - uses: hendrikmuhs/ccache-action@main
-        with:
-          variant: sccache
-          key: ${{ github.job }}-${{ matrix.os }}
-
-      - name: Build Linux
-        shell: bash -e -l {0}
-        run: |
-          ./build0.sh
-          cmake . -GNinja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DWITH_LLVM=yes \
-            -DWITH_LSP=yes \
-            -DWITH_MLIR=yes \
-            -DLFORTRAN_BUILD_ALL=yes \
-            -DWITH_STACKTRACE=no \
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
-            -DCMAKE_INSTALL_PREFIX=`pwd`/inst \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-
-          cmake --build . -j16 --target install
-
-      - name: Test unit tests
-        shell: bash -e -l {0}
-        run: ctest --output-on-failure
-
-      - name: Test Linux
-        shell: bash -e -l {0}
-        run: |
-          cd integration_tests
-          ./run_tests.py -b mlir -j1
-
   upload_docs:
     name: Documentation
     runs-on: ubuntu-latest
-    # Run on push to main, or only when the specific label is modified on a PR
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -738,7 +320,8 @@ jobs:
       - uses: hendrikmuhs/ccache-action@main
         with:
           variant: sccache
-          key: ${{ github.job }}-${{ matrix.os }}
+          key: ${{ github.job }}-ubuntu-latest
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Kernel
         shell: bash -e -l {0}
@@ -766,6 +349,7 @@ jobs:
           $(command -v python) build.py
 
       - name: Upload Docs
+        if: github.event_name == 'push'
         shell: bash -e -l {0}
         working-directory: doc
         run: |
@@ -775,10 +359,7 @@ jobs:
 
   build-and-push-image:
     runs-on: ubuntu-latest
-    # Run on push to main, or only when the specific label is modified on a PR
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
+    timeout-minutes: 40
     permissions:
       contents: read
       packages: write
@@ -813,15 +394,13 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' && github.repository == 'lfortran/lfortran' }}
           tags: ${{ steps.image-tags.outputs.tags }}
 
   build_xlfortran_jupyterlite:
     name: Build xlfortran JupyterLite kernel and run tests
     runs-on: ubuntu-24.04
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive')))
+    timeout-minutes: 50
     defaults:
       run:
         shell: bash -l {0}
@@ -886,8 +465,7 @@ jobs:
   deploy_jupyterlite:
     name: Deploy JupyterLite to GitHub Pages
     needs: build_xlfortran_jupyterlite
-    if: >-
-      (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.ref == 'refs/heads/main')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       pages: write
       id-token: write
@@ -895,6 +473,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
@@ -903,17 +482,14 @@ jobs:
   exhaustive_checks_gate:
     name: Exhaustive checks gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs:
+      - compatibility
+      - platform
       - debug_outOfSource
-      - test_llvm
-      - test_llvm_wasm
-      - test_without_llvm
-      - test_mlir
+      - release
       - build_xlfortran_jupyterlite
-    if: >-
-      always() && ((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.actor != 'github-merge-queue[bot]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci'))) && (github.event_name == 'merge_group' || github.event_name == 'push' ||
-          (github.event_name == 'pull_request' &&
-           contains(github.event.pull_request.labels.*.name, 'Tests::Run-Exhaustive'))))
+    if: always()
     steps:
       - name: Check required jobs
         env:

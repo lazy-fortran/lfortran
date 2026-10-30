@@ -1,0 +1,13 @@
+{
+    "basename": "pass_allocate_on_assignment-allocate_on_assignment_01-4d95f8f",
+    "cmd": "lfortran --pass=allocate_on_assignment --show-asr --no-color {infile} -o {outfile}",
+    "infile": "tests/allocate_on_assignment_01.f90",
+    "infile_hash": "e9c4c770ba7374473548ae2d721d996a47df318df0a4a6e1cfab6c68",
+    "outfile": null,
+    "outfile_hash": null,
+    "stdout": "pass_allocate_on_assignment-allocate_on_assignment_01-4d95f8f.stdout",
+    "stdout_hash": "ab144e8ab3c82e754437dcdd3c96e064107aac44fa4a0de1374e992d",
+    "stderr": null,
+    "stderr_hash": null,
+    "returncode": 0
+}

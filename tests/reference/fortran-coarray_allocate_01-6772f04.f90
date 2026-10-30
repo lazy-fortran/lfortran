@@ -5,7 +5,7 @@ type :: __module_prif_prif_team_type
     type(__module_prif_prif_dummy_team_descriptor), pointer :: info
 end type __module_prif_prif_team_type
 
-type :: prif_coarray_handle
+type, bind(c) :: prif_coarray_handle
     type(c_ptr) :: info
 end type prif_coarray_handle
 
@@ -30,20 +30,19 @@ call __module_prif_prif_allocate_coarray([int(1, kind=8), int(1, kind=8)], [int(
 call c_f_pointer(__cac_x__coarray_data, x)
 a = lcompilers_prif_this_image()
 x = lcompilers_prif_this_image()
-call __module_prif_prif_deallocate_coarray(__cac_a__coarray_handle)
+call __module_prif_prif_deallocate_coarray(__cac_a__coarray_handle, stat, errmsg)
 nullify (a)
-call __module_prif_prif_deallocate_coarray(__cac_b__coarray_handle)
+call __module_prif_prif_deallocate_coarray(__cac_b__coarray_handle, stat, errmsg)
 nullify (b)
-call __module_prif_prif_deallocate_coarray(__cac_x__coarray_handle)
+call __module_prif_prif_deallocate_coarray(__cac_x__coarray_handle, stat, errmsg)
 nullify (x)
 call __module_prif_prif_stop(.false.)
 
 contains
 
 interface
-    subroutine __module_prif_prif_allocate_coarray(lcobounds, ucobounds, size_in_bytes, final_proc,&
-        &
-         coarray_handle, allocated_memory, stat, errmsg, errmsg_alloc)
+    subroutine __module_prif_prif_allocate_coarray(lcobounds, ucobounds, size_in_bytes, final_proc, coarray_handle,&
+         allocated_memory, stat, errmsg, errmsg_alloc)
         type(c_ptr), intent(out) :: allocated_memory
         type(prif_coarray_handle), intent(out) :: coarray_handle
         character(len=*, kind=1), intent(inout), optional :: errmsg

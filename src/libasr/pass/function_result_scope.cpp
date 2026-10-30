@@ -412,7 +412,7 @@ public:
         scope->add_symbol(name, sym);
         ASR::expr_t* var = ASRUtils::EXPR(ASR::make_Var_t(al, loc, sym));
         associations.push_back(al, ASRUtils::STMT(
-            ASR::make_Associate_t(al, loc, var, expr)));
+            ASR::make_Associate_t(al, loc, var, expr, ASR::pointer_bounds_formType::NoPointerBounds)));
         replaced[expr] = var;
         *current_expr = var;
     }
@@ -771,8 +771,7 @@ public:
         for (size_t i = 0; i < block->n_body; i++) {
             block_body.push_back(al, block->m_body[i]);
         }
-        block_body.push_back(al, b.If(b.Eq(x.m_test, b.logical_false()),
-            {b.Exit()}, {}));
+        block_body.push_back(al, b.If(b.Not(x.m_test), {b.Exit()}, {}));
         block->m_body = block_body.p;
         block->n_body = block_body.size();
         Vec<ASR::stmt_t*> body;

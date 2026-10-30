@@ -631,6 +631,33 @@ static ASR::symbol_t* import_procedure_implementation(Allocator &al,
     return imported;
 }
 
+// The loops that a `collapse(collapse_levels)` construct partitions as one
+// iteration space, from the outermost one, `stmt`. The partitioning flattens
+// the loops into a rectangular space, so only its rectangular prefix
+// (`ASRUtils::rectangular_loop_nest_depth`) is collapsed. A loop whose bounds
+// depend on the index of an enclosing collapsed loop, and the loops inside
+// it, stay sequential loops in the body of the partitioned ones, which is
+// the same set of iterations.
+static std::vector<ASR::DoLoop_t*> collapsed_loop_nest(ASR::stmt_t* stmt,
+        int collapse_levels) {
+    std::vector<ASR::DoLoop_t*> loops;
+    for (int i = 0; i < collapse_levels; i++) {
+        if (!ASR::is_a<ASR::DoLoop_t>(*stmt)) {
+            throw LCompilersException("Expected nested DoLoop for collapse level " + std::to_string(i + 1));
+        }
+        ASR::DoLoop_t* do_loop = ASR::down_cast<ASR::DoLoop_t>(stmt);
+        loops.push_back(do_loop);
+        if (i < collapse_levels - 1) {
+            if (do_loop->n_body == 0) {
+                throw LCompilersException("Expected nested DoLoop for collapse level " + std::to_string(i + 2));
+            }
+            stmt = do_loop->m_body[0];
+        }
+    }
+    loops.resize(ASRUtils::rectangular_loop_nest_depth(loops));
+    return loops;
+}
+
 class InvolvedSymbolsCollector:
     public ASR::BaseWalkVisitor<InvolvedSymbolsCollector>
 {
@@ -645,9 +672,26 @@ class InvolvedSymbolsCollector:
         std::set<std::string> contiguity_checked_arrays;
         // Arrays listed in a private or firstprivate clause, with that clause
         std::map<std::string, ASR::omp_clauseType> private_arrays;
+        // Named constants used in the region. They are not data passed to
+        // the region; its procedure declares them with their values.
+        std::map<std::string, ASR::symbol_t*> named_constants;
         InvolvedSymbolsCollector(Allocator& al_, std::map<std::string, std::pair<ASR::ttype_t*, ASR::expr_t*>> &symbols) :
             al(al_), symbols(symbols) {}
 
+        // Records `sym` if it is a named constant, see `named_constants`.
+        bool add_named_constant(ASR::symbol_t* sym) {
+            ASR::symbol_t* target = ASRUtils::symbol_get_past_external(sym);
+            if (!ASR::is_a<ASR::Variable_t>(*target)) {
+                return false;
+            }
+            ASR::Variable_t* v = ASR::down_cast<ASR::Variable_t>(target);
+            if (v->m_storage != ASR::storage_typeType::Parameter || v->m_value == nullptr
+                    || ASRUtils::is_struct(*ASRUtils::extract_type(v->m_type))) {
+                return false;
+            }
+            named_constants[to_lower(ASRUtils::symbol_name(sym))] = sym;
+            return true;
+        }
 
         void visit_Var(const ASR::Var_t &x) {
             if(symbols.find(to_lower(ASRUtils::symbol_name(x.m_v))) != symbols.end()) {
@@ -656,6 +700,9 @@ class InvolvedSymbolsCollector:
             if (!ASR::is_a<ASR::Variable_t>(*ASRUtils::symbol_get_past_external(x.m_v))) {
                 // A procedure is not data: it is declared where the region
                 // is moved to (see import_procedure_declaration).
+                return;
+            }
+            if (add_named_constant(x.m_v)) {
                 return;
             }
             ASR::ttype_t* type = ASRUtils::symbol_type(x.m_v);
@@ -712,7 +759,8 @@ class InvolvedSymbolsCollector:
                 symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = ASRUtils::symbol_type(var->m_v);
                 symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = &var->base;
             }
-            if (ASR::is_a<ASR::Var_t>(*x.m_end)) {
+            if (ASR::is_a<ASR::Var_t>(*x.m_end)
+                    && !add_named_constant(ASR::down_cast<ASR::Var_t>(x.m_end)->m_v)) {
                 var = ASR::down_cast<ASR::Var_t>(x.m_end);
                 if(symbols.find((to_lower(ASRUtils::symbol_name(var->m_v)))) != symbols.end()) {
                     // Make the bool false in that pair
@@ -728,7 +776,8 @@ class InvolvedSymbolsCollector:
                 symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = ASRUtils::symbol_type(var->m_v);
                 symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = &var->base;
             }
-            if (ASR::is_a<ASR::Var_t>(*x.m_start)) {
+            if (ASR::is_a<ASR::Var_t>(*x.m_start)
+                    && !add_named_constant(ASR::down_cast<ASR::Var_t>(x.m_start)->m_v)) {
                 var = ASR::down_cast<ASR::Var_t>(x.m_start);
                 if(symbols.find((to_lower(ASRUtils::symbol_name(var->m_v)))) != symbols.end()) {
                     // Make the bool false in that pair
@@ -750,6 +799,44 @@ class InvolvedSymbolsCollector:
         }
 };
 std::map<SymbolTable*, InvolvedSymbolsCollector*> involved_symbols_collector_map;
+
+// Makes the references to the named constants that are keys of `renamed`
+// refer to their values in `renamed` instead.
+class ReplaceNamedConstants: public ASR::BaseExprReplacer<ReplaceNamedConstants> {
+private:
+    Allocator &al;
+    const std::map<ASR::symbol_t*, ASR::symbol_t*> &renamed;
+
+public:
+    ReplaceNamedConstants(Allocator &al_,
+            const std::map<ASR::symbol_t*, ASR::symbol_t*> &renamed_) :
+        al(al_), renamed(renamed_) {}
+
+    void replace_Var(ASR::Var_t *x) {
+        auto it = renamed.find(x->m_v);
+        if (it != renamed.end()) {
+            *current_expr = ASRUtils::EXPR(ASR::make_Var_t(al, x->base.base.loc, it->second));
+        }
+    }
+};
+
+class ReplaceNamedConstantsVisitor:
+    public ASR::CallReplacerOnExpressionsVisitor<ReplaceNamedConstantsVisitor> {
+
+private:
+    ReplaceNamedConstants replacer;
+
+public:
+    ReplaceNamedConstantsVisitor(Allocator &al,
+            const std::map<ASR::symbol_t*, ASR::symbol_t*> &renamed) :
+        replacer(al, renamed) {}
+
+    void call_replacer() {
+        replacer.current_expr = current_expr;
+        replacer.replace_expr(*current_expr);
+    }
+};
+
 // Replaces all the symbols used inside the region with the same symbols
 // passed as argument to the function
 class ReplaceSymbols: public ASR::BaseExprReplacer<ReplaceSymbols> {
@@ -872,9 +959,59 @@ class ParallelRegionVisitor :
             if (ASRUtils::is_pointer(target_type) && ASR::is_a<ASR::FunctionType_t>(
                     *ASRUtils::type_get_past_pointer(target_type))) {
                 return ASRUtils::STMT(ASR::make_Associate_t(al, target->base.loc,
-                    target, value));
+                    target, value, ASR::pointer_bounds_formType::NoPointerBounds));
             }
             return ASRUtils::ASRBuilder(al, target->base.loc).Assignment(target, value);
+        }
+
+        // Declares the named constants used in region `x` in `current_scope`,
+        // the scope of the region's procedure, with their values. The scope
+        // already has symbols of its own, such as the imported iso_c_binding
+        // and omp_lib entities and the `data` argument: a constant whose name
+        // is taken by another entity is declared under a new name, to which
+        // the references of the region are renamed.
+        void declare_named_constants(const Location &loc, const ASR::OMPRegion_t &x,
+                InvolvedSymbolsCollector* c) {
+            std::map<ASR::symbol_t*, ASR::symbol_t*> renamed;
+            for (auto &it : c->named_constants) {
+                ASR::symbol_t* sym = it.second;
+                std::string name = it.first;
+                if (ASR::symbol_t* existing = current_scope->get_symbol(name)) {
+                    if (ASRUtils::symbol_get_past_external(existing)
+                            == ASRUtils::symbol_get_past_external(sym)) {
+                        continue;
+                    }
+                    name = current_scope->get_unique_name(name, false);
+                }
+                ASR::symbol_t* decl = nullptr;
+                if (ASR::is_a<ASR::ExternalSymbol_t>(*sym)) {
+                    ASR::ExternalSymbol_t* ext = ASR::down_cast<ASR::ExternalSymbol_t>(sym);
+                    decl = ASR::down_cast<ASR::symbol_t>(ASR::make_ExternalSymbol_t(al, loc,
+                        current_scope, s2c(al, name), ext->m_external, ext->m_module_name,
+                        ext->m_scope_names, ext->n_scope_names, ext->m_original_name,
+                        ASR::accessType::Public));
+                } else {
+                    ASR::Variable_t* v = ASR::down_cast<ASR::Variable_t>(sym);
+                    // The value is a constant, unlike the symbolic value, which
+                    // can refer to other variables of the enclosing scope.
+                    ASRUtils::ExprStmtDuplicator duplicator(al);
+                    decl = ASR::down_cast<ASR::symbol_t>(ASRUtils::make_Variable_t_util(al,
+                        loc, current_scope, s2c(al, name), nullptr, 0, ASR::intentType::Local,
+                        duplicator.duplicate_expr(v->m_value),
+                        duplicator.duplicate_expr(v->m_value),
+                        ASR::storage_typeType::Parameter,
+                        ASRUtils::duplicate_type(al, v->m_type), nullptr, v->m_abi,
+                        ASR::accessType::Public, ASR::presenceType::Required, false));
+                }
+                current_scope->add_symbol(name, decl);
+                if (name != it.first) {
+                    renamed[sym] = decl;
+                }
+            }
+            if (!renamed.empty()) {
+                ReplaceNamedConstantsVisitor v(al, renamed);
+                v.visit_OMPRegion(x);
+            }
         }
 
         void transform_stmts(ASR::stmt_t **&m_body, size_t &n_body) {
@@ -886,7 +1023,7 @@ class ParallelRegionVisitor :
             for (size_t i=0; i<n_body; i++) {
                 pass_result.n = 0;
                 pass_result_allocatable.n = 0;
-                current_stmt_index = i;
+                current_stmt_index = checked_integer_cast<int>(i);
                 pass_result.reserve(al, 1);
                 pass_result_allocatable.reserve(al, 1);
                 remove_original_statement = false;
@@ -918,7 +1055,7 @@ class ParallelRegionVisitor :
             current_n_body = n_body;
             for (size_t i=0; i<n_body; i++) {
                 pass_result.n = 0;
-                current_stmt_index = i;
+                current_stmt_index = checked_integer_cast<int>(i);
                 pass_result.reserve(al, 1);
                 remove_original_statement = false;
                 visit_stmt(*m_body[i]);
@@ -1189,7 +1326,7 @@ class ParallelRegionVisitor :
                     for (size_t i = 0; i < func->n_args; i++) {
                         std::string arg_name = ASRUtils::symbol_name(ASR::down_cast<ASR::Var_t>(func->m_args[i])->m_v);
                         if (std::find(array_variables.begin(), array_variables.end(), arg_name) != array_variables.end()) {
-                            array_arg_mapping[arg_name] = i;
+                            array_arg_mapping[arg_name] = checked_integer_cast<int>(i);
                             func->m_args[i] = b.Var(func->m_symtab->resolve_symbol(arg_name));
                         }
                     }
@@ -1834,7 +1971,7 @@ class ParallelRegionVisitor :
                     if (private_array == c->private_arrays.end()) {
                         // <sym> => tdata%<sym>
                         body.push_back(al, ASRUtils::STMT(ASR::make_Associate_t(al, loc,
-                            b.Var(current_scope->get_symbol(it.first)), descriptor)));
+                            b.Var(current_scope->get_symbol(it.first)), descriptor, ASR::pointer_bounds_formType::NoPointerBounds)));
                         continue;
                     }
                     // A private copy exists only if the original is associated, which an
@@ -1848,7 +1985,7 @@ class ParallelRegionVisitor :
                     ASR::expr_t* original = b.Variable(current_scope,
                         current_scope->get_unique_name("original_" + it.first), ASRUtils::expr_type(descriptor),
                         ASR::intentType::Local, nullptr, ASR::abiType::BindC);
-                    body.push_back(al, ASRUtils::STMT(ASR::make_Associate_t(al, loc, original, descriptor)));
+                    body.push_back(al, ASRUtils::STMT(ASR::make_Associate_t(al, loc, original, descriptor, ASR::pointer_bounds_formType::NoPointerBounds)));
                     ASR::expr_t* copy = b.Var(current_scope->get_symbol(it.first));
                     size_t n_dims = ASRUtils::extract_n_dims_from_ttype(sym_type);
                     Vec<ASR::dimension_t> dims; dims.reserve(al, n_dims);
@@ -2027,7 +2164,7 @@ class ParallelRegionVisitor :
                         int arg_index = -1;
                         for (size_t i = 0; i < func->n_args; i++) {
                             if (ASRUtils::symbol_name(ASR::down_cast<ASR::Var_t>(func->m_args[i])->m_v) == it.first) {
-                                arg_index = i;
+                                arg_index = checked_integer_cast<int>(i);
                                 break;
                             }
                         }
@@ -2073,7 +2210,7 @@ class ParallelRegionVisitor :
                         // tdata%<sym> => <sym>
                         nested_lowered_body.push_back(ASRUtils::STMT(ASR::make_Associate_t(al, loc,
                             ASRUtils::EXPR(ASR::make_StructInstanceMember_t(al, loc, data_expr,
-                            sym, ASRUtils::symbol_type(sym), nullptr)), array_ref)));
+                            sym, ASRUtils::symbol_type(sym), nullptr)), array_ref, ASR::pointer_bounds_formType::NoPointerBounds)));
                         continue;
                     }
                     ASR::expr_t* array_var = array_ref;
@@ -2300,6 +2437,7 @@ class ParallelRegionVisitor :
                 }
             }
 
+            declare_named_constants(x.base.base.loc, x, c);
             unpack_data_from_thread_data_omp(x.base.base.loc, thread_data_module_name, tdata_expr, fn_body, c);
 
             DoConcurrentStatementVisitor stmt_visitor(al, current_scope, program_procedure_copies);
@@ -2538,7 +2676,7 @@ class ParallelRegionVisitor :
             int num_threads=0;
             for (size_t i=0;i<x.n_clauses;i++) {
                 if (x.m_clauses[i]->type == ASR::omp_clauseType::OMPNumThreads) {
-                    num_threads = ASR::down_cast<ASR::IntegerConstant_t>(((ASR::down_cast<ASR::OMPNumThreads_t>(x.m_clauses[i]))->m_num_threads))->m_n;
+                    num_threads = static_cast<int>(ASR::down_cast<ASR::IntegerConstant_t>(((ASR::down_cast<ASR::OMPNumThreads_t>(x.m_clauses[i]))->m_num_threads))->m_n);
                 }
             }
             if (num_threads != 0) {
@@ -2585,7 +2723,7 @@ class ParallelRegionVisitor :
                                         ASR::storage_typeType::Default, ptr_type, local_var->m_type_declaration,
                                         local_var->m_abi, local_var->m_access, local_var->m_presence,
                                         local_var->m_value_attr, local_var->m_target_attr, local_var->m_contiguous_attr, 
-                                        local_var->m_bindc_name, local_var->m_is_volatile, local_var->m_is_protected,
+                                        local_var->m_bindc_name, local_var->m_is_volatile, local_var->m_is_asynchronous, local_var->m_is_protected,
                                         ASR::pass_attrType::NotMethod, nullptr,
                                         local_var->m_codims, local_var->n_codims)
                                         );
@@ -2635,7 +2773,7 @@ class ParallelRegionVisitor :
                     if(clauses_heirarchial[nesting_lvl][j]->type == ASR::omp_clauseType::OMPReduction) {
                         reduction_clauses.push_back(al, ASR::down_cast<ASR::OMPReduction_t>(clauses_heirarchial[nesting_lvl][j]));
                     } else if(clauses_heirarchial[nesting_lvl][j]->type == ASR::omp_clauseType::OMPCollapse) {
-                        collapse_levels = ASR::down_cast<ASR::IntegerConstant_t>(((ASR::down_cast<ASR::OMPCollapse_t>(clauses_heirarchial[nesting_lvl][j]))->m_count))->m_n;
+                        collapse_levels = static_cast<int>(ASR::down_cast<ASR::IntegerConstant_t>(((ASR::down_cast<ASR::OMPCollapse_t>(clauses_heirarchial[nesting_lvl][j]))->m_count))->m_n);
                     } else if(clauses_heirarchial[nesting_lvl][j]->type == ASR::omp_clauseType::OMPSchedule) {
                         ASR::OMPSchedule_t* schedule_clause = ASR::down_cast<ASR::OMPSchedule_t>(clauses_heirarchial[nesting_lvl][j]);
                         schedule_kind = schedule_clause->m_kind;
@@ -2655,7 +2793,7 @@ class ParallelRegionVisitor :
                     chunk_size = schedule_clause->m_chunk_size;
                     has_schedule_clause = true;
                 } else if(clauses_heirarchial[nesting_lvl][j]->type == ASR::omp_clauseType::OMPCollapse) {
-                    collapse_levels = ASR::down_cast<ASR::IntegerConstant_t>(((ASR::down_cast<ASR::OMPCollapse_t>(clauses_heirarchial[nesting_lvl][j]))->m_count))->m_n;
+                    collapse_levels = static_cast<int>(ASR::down_cast<ASR::IntegerConstant_t>(((ASR::down_cast<ASR::OMPCollapse_t>(clauses_heirarchial[nesting_lvl][j]))->m_count))->m_n);
                 }
             }
             // Step 2: A reduction on a worksharing `do` (the enclosing parallel
@@ -2682,20 +2820,13 @@ class ParallelRegionVisitor :
 
             // Step 3: Extract loop heads from nested DoLoop statements
             std::vector<ASR::do_loop_head_t> heads;
-            heads.reserve(collapse_levels);
-            ASR::stmt_t* current_stmt = x.m_body[0];
-            ASR::DoLoop_t* innermost_loop = nullptr;
-            for (int i = 0; i < collapse_levels; i++) {
-                if (!ASR::is_a<ASR::DoLoop_t>(*current_stmt)) {
-                    throw LCompilersException("Expected nested DoLoop for collapse level " + std::to_string(i + 1));
-                }
-                ASR::DoLoop_t* do_loop = ASR::down_cast<ASR::DoLoop_t>(current_stmt);
+            std::vector<ASR::DoLoop_t*> loops = collapsed_loop_nest(
+                x.m_body[0], collapse_levels);
+            heads.reserve(loops.size());
+            for (ASR::DoLoop_t* do_loop : loops) {
                 heads.push_back(do_loop->m_head);
-                innermost_loop = do_loop;
-                if (i < collapse_levels - 1 && do_loop->n_body > 0) {
-                    current_stmt = do_loop->m_body[0]; // Move to the next nested loop
-                }
             }
+            ASR::DoLoop_t* innermost_loop = loops.back();
             ASR::stmt_t* bounds_block = evaluate_result_bounds_once(heads, loc);
             if (!private_copies.empty()) {
                 AssociateVarResolverVisitor private_copy_replacer(al, private_copies);
@@ -2814,7 +2945,7 @@ class ParallelRegionVisitor :
                 nested_lowered_body.push_back(ASRUtils::STMT(ASR::make_Assignment_t(al, loc, while_condition, 
                     ASRUtils::EXPR(ASR::make_FunctionCall_t(al, loc,
                         current_scope->get_symbol(gomp_start_func), nullptr, start_args.p, start_args.n,
-                        ASRUtils::TYPE(ASR::make_Logical_t(al, loc, 1)), nullptr,  nullptr)), nullptr, 0, false)));
+                        ASRUtils::TYPE(ASR::make_Logical_t(al, loc, 1)), nullptr,  nullptr)), nullptr, 0, false, false, false)));
                 
                 // Create the scheduled loop using GOMP_loop_*_next
                 Vec<ASR::stmt_t*> while_body;
@@ -3247,6 +3378,7 @@ class ParallelRegionVisitor :
                 }
             }
             
+            declare_named_constants(loc, x, c);
             unpack_data_from_thread_data_omp(loc, thread_data_module_name, tdata_expr, fn_body, c, "task_data_struct");
 
             visit_OMPBody(&x, fn_body);
@@ -3393,16 +3525,67 @@ class ParallelRegionVisitor :
             nested_lowered_body.push_back(b.If(condition, single_body_s, {}));
         }
 
+        // The lock of the critical constructs named `name`. Every critical
+        // construct of that name in the program must use the same lock, so
+        // it is a global variable under the name other compilers give it,
+        // with common linkage, which the linker merges across object files.
+        ASR::expr_t* get_critical_name_lock(const Location &loc, const std::string &name) {
+            SymbolTable* global_scope = current_scope;
+            while (global_scope->parent != nullptr) {
+                global_scope = global_scope->parent;
+            }
+            // The leading underscores keep the name apart from any Fortran
+            // name in the global scope
+            std::string lock_name = "__lcompilers_omp_critical_" + name;
+            ASR::symbol_t* lock_sym = global_scope->get_symbol(lock_name);
+            if (lock_sym == nullptr) {
+                lock_sym = ASR::down_cast<ASR::symbol_t>(ASRUtils::make_Variable_t_util(
+                    al, loc, global_scope, s2c(al, lock_name), nullptr, 0,
+                    ASR::intentType::Local, nullptr, nullptr, ASR::storage_typeType::Default,
+                    ASRUtils::TYPE(ASR::make_CPtr_t(al, loc, ASR::cptr_kindType::CPointer)),
+                    nullptr, ASR::abiType::BindC, ASR::accessType::Public,
+                    ASR::presenceType::Required, false, false, false,
+                    s2c(al, ".gomp_critical_user_" + name)));
+                global_scope->add_symbol(lock_name, lock_sym);
+            }
+            return ASRUtils::EXPR(ASR::make_Var_t(al, loc, lock_sym));
+        }
+
         void visit_OMPCritical(const ASR::OMPRegion_t &x) {
             nested_lowered_body = {};
             Location loc = x.base.base.loc;
             ASRUtils::ASRBuilder b(al, loc);
 
+            // A critical construct outside any parallel region is not in an
+            // outlined function, which imports omp_lib, so import it here
+            ASR::symbol_t* mod_sym = create_module(loc, "omp_lib");
+            LCOMPILERS_ASSERT(mod_sym != nullptr && ASR::is_a<ASR::Module_t>(*mod_sym));
+            std::string unsupported_sym_name = import_all(ASR::down_cast<ASR::Module_t>(mod_sym));
+            LCOMPILERS_ASSERT(unsupported_sym_name == "");
+
+            // An unnamed critical construct uses the one global lock of the
+            // runtime. A named one uses the lock of its name, which the
+            // runtime keeps in a zero-initialized pointer-sized variable.
+            ASR::expr_t* lock = nullptr;
+            for (size_t i = 0; i < x.n_clauses; i++) {
+                if (ASR::is_a<ASR::OMPCriticalName_t>(*x.m_clauses[i])) {
+                    lock = get_critical_name_lock(loc, ASR::down_cast<
+                        ASR::OMPCriticalName_t>(x.m_clauses[i])->m_name);
+                }
+            }
+            Vec<ASR::call_arg_t> lock_args;
+            lock_args.reserve(al, 1);
+            if (lock != nullptr) {
+                ASR::call_arg_t lock_arg;
+                lock_arg.loc = loc;
+                lock_arg.m_value = lock;
+                lock_args.push_back(al, lock_arg);
+            }
+
             // Generate gomp_critical_start call
-            Vec<ASR::call_arg_t> start_args;
-            start_args.reserve(al, 0);
             nested_lowered_body.push_back(ASRUtils::STMT(ASR::make_SubroutineCall_t(al, loc,
-                current_scope->get_symbol("gomp_critical_start"), nullptr, start_args.p, start_args.n, nullptr, false)));
+                current_scope->get_symbol(lock ? "gomp_critical_name_start" : "gomp_critical_start"),
+                nullptr, lock_args.p, lock_args.n, nullptr, false)));
 
             // Process the critical section body
             DoConcurrentStatementVisitor stmt_visitor(al, current_scope, program_procedure_copies);
@@ -3417,12 +3600,12 @@ class ParallelRegionVisitor :
             }
 
             // Generate gomp_critical_end call
-            Vec<ASR::call_arg_t> end_args;
-            end_args.reserve(al, 0);
             nested_lowered_body.push_back(ASRUtils::STMT(ASR::make_SubroutineCall_t(al, loc,
-                current_scope->get_symbol("gomp_critical_end"), nullptr, end_args.p, end_args.n, nullptr, false)));
+                current_scope->get_symbol(lock ? "gomp_critical_name_end" : "gomp_critical_end"),
+                nullptr, lock_args.p, lock_args.n, nullptr, false)));
 
             clauses_heirarchial[nesting_lvl].clear();
+            remove_original_statement = true;
         }
 
         void visit_OMPAtomic(const ASR::OMPRegion_t &x) {
@@ -3610,6 +3793,7 @@ class ParallelRegionVisitor :
             }
             
             // Unpack data
+            declare_named_constants(x.base.base.loc, x, c);
             unpack_data_from_thread_data_omp(x.base.base.loc, thread_data_module_name, tdata_expr, fn_body, c, "teams_thread_data");
             
             Vec<ASR::OMPReduction_t*> reduction_clauses;
@@ -3836,7 +4020,7 @@ class ParallelRegionVisitor :
                     ASR::storage_typeType::Default, ptr_type, local_var->m_type_declaration,
                     local_var->m_abi, local_var->m_access, local_var->m_presence,
                     local_var->m_value_attr, local_var->m_target_attr, local_var->m_contiguous_attr, 
-                    local_var->m_bindc_name, local_var->m_is_volatile, local_var->m_is_protected,
+                    local_var->m_bindc_name, local_var->m_is_volatile, local_var->m_is_asynchronous, local_var->m_is_protected,
                     ASR::pass_attrType::NotMethod, nullptr,
                     local_var->m_codims, local_var->n_codims)
                 );
@@ -3895,34 +4079,25 @@ class ParallelRegionVisitor :
             // Extract collapse levels and process similar to OMPDo
             for(size_t i = 0; i < x.n_clauses; i++) {
                 if(x.m_clauses[i]->type == ASR::omp_clauseType::OMPCollapse) {
-                    collapse_levels = ASR::down_cast<ASR::IntegerConstant_t>(
-                        ((ASR::down_cast<ASR::OMPCollapse_t>(x.m_clauses[i]))->m_count))->m_n;
+                    collapse_levels = static_cast<int>(ASR::down_cast<ASR::IntegerConstant_t>(
+                        ((ASR::down_cast<ASR::OMPCollapse_t>(x.m_clauses[i]))->m_count))->m_n);
                 }
             }
             
             // Extract loop heads
             std::vector<ASR::do_loop_head_t> heads;
-            heads.reserve(collapse_levels);
-            ASR::stmt_t* current_stmt = x.m_body[0];
-            ASR::DoLoop_t* innermost_loop = nullptr;
-            
-            for (int i = 0; i < collapse_levels; i++) {
-                if (!ASR::is_a<ASR::DoLoop_t>(*current_stmt)) {
-                    throw LCompilersException("Expected nested DoLoop for collapse level " + 
-                        std::to_string(i + 1));
-                }
-                ASR::DoLoop_t* do_loop = ASR::down_cast<ASR::DoLoop_t>(current_stmt);
+            std::vector<ASR::DoLoop_t*> loops = collapsed_loop_nest(
+                x.m_body[0], collapse_levels);
+            heads.reserve(loops.size());
+            for (ASR::DoLoop_t* do_loop : loops) {
                 if (!lower_body) {
                     // Only the bounds are used in this scope. The body is
                     // rebound by the construct that lowers it.
                     stmt_visitor.visit_do_loop_head(do_loop->m_head);
                 }
                 heads.push_back(do_loop->m_head);
-                innermost_loop = do_loop;
-                if (i < collapse_levels - 1 && do_loop->n_body > 0) {
-                    current_stmt = do_loop->m_body[0];
-                }
             }
+            ASR::DoLoop_t* innermost_loop = loops.back();
             bounds_block = evaluate_result_bounds_once(heads, loc);
             
             // Calculate total iterations
@@ -4140,7 +4315,7 @@ class RepointCallArguments: public PassUtils::PassVisitor<RepointCallArguments> 
                     ASRUtils::duplicate_type(al, formal),
                     ASR::intentType::Local);
                 pass_result.push_back(al, ASRUtils::STMT(
-                    ASR::make_Associate_t(al, loc, ptr, args[i].m_value)));
+                    ASR::make_Associate_t(al, loc, ptr, args[i].m_value, ASR::pointer_bounds_formType::NoPointerBounds)));
                 args[i].m_value = ptr;
             }
         }
@@ -4161,7 +4336,12 @@ void pass_replace_openmp(Allocator &al, ASR::TranslationUnit_t &unit,
                             const PassOptions &pass_options) {
     if (pass_options.openmp) {
         ParallelRegionVisitor v(al, pass_options);
-        v.visit_TranslationUnit(unit);
+        // The outlined region procedures are reachable only through the
+        // function pointers this translation unit passes to the OpenMP
+        // runtime, and their names are unique only within it.
+        PassUtils::make_new_tu_functions_private(unit, [&]() {
+            v.visit_TranslationUnit(unit);
+        });
         RepointCallArguments r(al);
         r.visit_TranslationUnit(unit);
         // The outlined procedures call omp_lib (GOMP) functions and call and
