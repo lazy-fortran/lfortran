@@ -458,6 +458,7 @@ RUN(NAME ilp64_file_ops_01 LABELS gfortran llvm EXTRA_ARGS -fdefault-integer-8 G
 RUN(NAME ilp64_logical_read_01 LABELS gfortran llvm EXTRA_ARGS -fdefault-integer-8 GFORTRAN_ARGS -fdefault-integer-8)
 RUN(NAME ilp64_complex_literal_01 LABELS gfortran llvm EXTRA_ARGS -fdefault-integer-8 GFORTRAN_ARGS -fdefault-integer-8)
 RUN(NAME ilp64_logical_compare_01 LABELS gfortran llvm EXTRA_ARGS -fdefault-integer-8 GFORTRAN_ARGS -fdefault-integer-8)
+RUN(NAME ilp64_logical_compare_02 LABELS gfortran llvm EXTRA_ARGS -fdefault-integer-8 GFORTRAN_ARGS -fdefault-integer-8)
 RUN(NAME fpie_flag_01 LABELS gfortran llvm EXTRA_ARGS -fPIE GFORTRAN_ARGS -fPIE)
 # CMake links the shared library through the compiler driver with `--shared`
 # for LFortran and `-shared` for GFortran (see SHARED_LIBRARY_FILES above).
@@ -5020,6 +5021,7 @@ RUN(NAME common_40 LABELS gfortran llvm)
 RUN(NAME common_41 LABELS gfortran llvm)
 RUN(NAME common_42 LABELS gfortran llvm)
 RUN(NAME common_43 LABELS gfortran llvm)
+RUN(NAME common_44 LABELS gfortran llvm EXTRAFILES common_44a.f90 common_44b.f90 EXTRA_ARGS --separate-compilation)
 RUN(NAME common_52 LABELS gfortran llvm EXTRAFILES common_52_left.f90 common_52_right.f90 common_52_swap.f90 common_52_relay.f90)
 RUN(NAME common_53 LABELS gfortran llvm EXTRAFILES common_53_m1.f90 common_53_m2.f90)
 RUN(NAME common_54 LABELS gfortran llvm EXTRAFILES common_54_module.f90 common_54_legacy.f90 EXTRA_ARGS --implicit-interface)
@@ -5081,6 +5083,7 @@ RUN(NAME save_25 LABELS llvm) # gfortran 13 at CI rejects procedure targets in i
 RUN(NAME save_26 LABELS llvm) # gfortran 13 at CI rejects procedure targets in initializer structure constructors
 RUN(NAME save_27 LABELS gfortran llvm EXTRAFILES save_27_sub.f90)
 RUN(NAME save_28 LABELS gfortran llvm)
+RUN(NAME save_29 LABELS gfortran llvm)
 
 
 RUN(NAME entry_01 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc fortran)
