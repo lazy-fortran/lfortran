@@ -1,0 +1,13 @@
+{
+    "basename": "llvm-fma_contract-1e952aa",
+    "cmd": "lfortran --no-color --show-llvm {infile} -o {outfile}",
+    "infile": "tests/fma_contract.f90",
+    "infile_hash": "c28d1c326f2c1f3c9b9713ff3d7a0af01f21d00e04b07bf78303aae3",
+    "outfile": null,
+    "outfile_hash": null,
+    "stdout": "llvm-fma_contract-1e952aa.stdout",
+    "stdout_hash": "610c2d3c2c447f34cbfa795690f1466f51c3156f12bf125862c97a75",
+    "stderr": null,
+    "stderr_hash": null,
+    "returncode": 0
+}

@@ -1,0 +1,66 @@
+; ModuleID = 'LFortran'
+source_filename = "LFortran"
+target datalayout = "..."
+target triple = "x86_64-unknown-linux-gnu"
+
+@0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
+@serialization_info = private unnamed_addr constant [3 x i8] c"R8\00", align 1
+@1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
+
+; Function Attrs: norecurse nounwind readonly
+define double @__module_fma_contract_m_muladd(double* nocapture readonly %a, double* nocapture readonly %b, double* nocapture readonly %c) local_unnamed_addr #0 {
+.entry:
+  %0 = load double, double* %c, align 8
+  %1 = load double, double* %a, align 8
+  %2 = load double, double* %b, align 8
+  %3 = fmul fast double %2, %1
+  %4 = fadd fast double %3, %0
+  ret double %4
+}
+
+define i32 @main(i32 %0, i8** %1) local_unnamed_addr #1 {
+.entry:
+  %2 = tail call i8* @_lfortran_get_default_allocator()
+  tail call void @_lpython_call_initial_functions(i32 %0, i8** %1)
+  %muladd_result = alloca double, align 8
+  %3 = tail call i8* @llvm.stacksave()
+  store double 3.250000e+00, double* %muladd_result, align 8
+  tail call void @llvm.stackrestore(i8* %3)
+  %4 = alloca i64, align 8
+  %5 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @serialization_info, i64 0, i64 0), i64* nonnull %4, i32 0, i32 0, i32 0, i32 0, i32 0, double* nonnull %muladd_result)
+  %6 = load i64, i64* %4, align 8
+  %7 = trunc i64 %6 to i32
+  call void @_lfortran_printf(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @1, i64 0, i64 0), i8* %5, i32 %7, i32 1, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @0, i64 0, i64 0), i32 1)
+  %8 = icmp eq i8* %5, null
+  br i1 %8, label %FINALIZE_SYMTABLE_fma_contract, label %free_nonnull
+
+free_nonnull:                                     ; preds = %.entry
+  call void @_lfortran_free_alloc(i8* %2, i8* nonnull %5)
+  br label %FINALIZE_SYMTABLE_fma_contract
+
+FINALIZE_SYMTABLE_fma_contract:                   ; preds = %free_nonnull, %.entry
+  call void @_lfortran_internal_alloc_finalize()
+  ret i32 0
+}
+
+declare void @_lpython_call_initial_functions(i32, i8**) local_unnamed_addr
+
+; Function Attrs: nounwind
+declare i8* @llvm.stacksave() #2
+
+; Function Attrs: nounwind
+declare void @llvm.stackrestore(i8*) #2
+
+declare i8* @_lcompilers_string_format_fortran(i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, ...) local_unnamed_addr
+
+declare i8* @_lfortran_get_default_allocator() local_unnamed_addr
+
+declare void @_lfortran_printf(i8*, i8*, i32, i32, i8*, i32) local_unnamed_addr
+
+declare void @_lfortran_free_alloc(i8*, i8*) local_unnamed_addr
+
+declare void @_lfortran_internal_alloc_finalize() local_unnamed_addr
+
+attributes #0 = { norecurse nounwind readonly "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "target-cpu"="generic" "target-features"="+64bit,+adx,+aes,+avx,+avx2,+bmi,+bmi2,+clflushopt,+clwb,+clzero,+cmov,+cx16,+cx8,+f16c,+fma,+fsgsbase,+fxsr,+invpcid,+lzcnt,+mmx,+movbe,+mwaitx,+pclmul,+pku,+popcnt,+prfchw,+rdpid,+rdrnd,+rdseed,+sahf,+sha,+shstk,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+sse4a,+ssse3,+vaes,+vpclmulqdq,+wbnoinvd,+xsave,+xsavec,+xsaveopt,+xsaves,-amx-bf16,-amx-int8,-amx-tile,-avx512bf16,-avx512bitalg,-avx512bw,-avx512cd,-avx512dq,-avx512er,-avx512f,-avx512ifma,-avx512pf,-avx512vbmi,-avx512vbmi2,-avx512vl,-avx512vnni,-avx512vp2intersect,-avx512vpopcntdq,-cldemote,-enqcmd,-fma4,-gfni,-lwp,-movdir64b,-movdiri,-pconfig,-prefetchwt1,-ptwrite,-rtm,-serialize,-sgx,-tbm,-tsxldtrk,-waitpkg,-xop" "unsafe-fp-math"="true" }
+attributes #1 = { "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "target-cpu"="generic" "target-features"="+64bit,+adx,+aes,+avx,+avx2,+bmi,+bmi2,+clflushopt,+clwb,+clzero,+cmov,+cx16,+cx8,+f16c,+fma,+fsgsbase,+fxsr,+invpcid,+lzcnt,+mmx,+movbe,+mwaitx,+pclmul,+pku,+popcnt,+prfchw,+rdpid,+rdrnd,+rdseed,+sahf,+sha,+shstk,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+sse4a,+ssse3,+vaes,+vpclmulqdq,+wbnoinvd,+xsave,+xsavec,+xsaveopt,+xsaves,-amx-bf16,-amx-int8,-amx-tile,-avx512bf16,-avx512bitalg,-avx512bw,-avx512cd,-avx512dq,-avx512er,-avx512f,-avx512ifma,-avx512pf,-avx512vbmi,-avx512vbmi2,-avx512vl,-avx512vnni,-avx512vp2intersect,-avx512vpopcntdq,-cldemote,-enqcmd,-fma4,-gfni,-lwp,-movdir64b,-movdiri,-pconfig,-prefetchwt1,-ptwrite,-rtm,-serialize,-sgx,-tbm,-tsxldtrk,-waitpkg,-xop" "unsafe-fp-math"="true" }
+attributes #2 = { nounwind }

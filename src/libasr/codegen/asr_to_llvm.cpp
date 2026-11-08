@@ -25813,13 +25813,17 @@ public:
             LLVM::is_llvm_pointer(*expr_type(m_args[2].m_value)) ? 2 : 1,
             true);
         llvm::Value* c = tmp;
+        // The FMA nodes come from the optimisation pass that contracts a*b + c,
+        // so fuse only where the target does it in hardware: llvm.fma would
+        // force an exactly rounded fusion, which targets without the
+        // instruction (WebAssembly, older x86) compute in software.
 #if LLVM_VERSION_MAJOR >= 8
-        tmp = builder->CreateIntrinsic(llvm::Intrinsic::fma,
+        tmp = builder->CreateIntrinsic(llvm::Intrinsic::fmuladd,
                 {a->getType()},
                 {b, c, a});
 #else
         // LLVM 7: Use getDeclaration instead
-        llvm::Function *fn = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::fma, {a->getType()});
+        llvm::Function *fn = llvm::Intrinsic::getDeclaration(module.get(), llvm::Intrinsic::fmuladd, {a->getType()});
         tmp = builder->CreateCall(fn, {b, c, a});
 #endif
     }
