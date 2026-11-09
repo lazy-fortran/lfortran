@@ -1759,6 +1759,25 @@ void set_intrinsic(ASR::TranslationUnit_t* trans_unit) {
     }
 }
 
+// The intrinsic iso_c_binding module is compiled once, for a 64-bit host, so the
+// kinds that follow the target C ABI are set when it is loaded.
+static void set_iso_c_binding_kinds(Allocator &al, ASR::TranslationUnit_t *tu,
+        const LCompilers::PassOptions &po) {
+    ASR::Module_t *m = extract_module(*tu);
+    const std::pair<const char*, int> kinds[] = {
+        {"c_long", po.c_long_kind}, {"c_size_t", po.c_pointer_kind},
+        {"c_intptr_t", po.c_pointer_kind}, {"c_ptrdiff_t", po.c_pointer_kind}};
+    for (const auto &k : kinds) {
+        ASR::symbol_t *s = m->m_symtab->get_symbol(k.first);
+        if (s == nullptr || !ASR::is_a<ASR::Variable_t>(*s)) continue;
+        ASR::Variable_t *v = ASR::down_cast<ASR::Variable_t>(s);
+        ASR::expr_t *value = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al,
+            v->base.base.loc, k.second, v->m_type));
+        v->m_symbolic_value = value;
+        v->m_value = value;
+    }
+}
+
 Result<ASR::TranslationUnit_t*, ErrorMessage> find_and_load_module(Allocator &al, const std::string &msym,
                                                 SymbolTable &symtab, bool intrinsic,
                                                 LCompilers::PassOptions& pass_options,
@@ -1787,6 +1806,9 @@ Result<ASR::TranslationUnit_t*, ErrorMessage> find_and_load_module(Allocator &al
                 ASR::TranslationUnit_t* asr = res.result;
                 if (intrinsic) {
                     set_intrinsic(asr);
+                }
+                if (msym == "lfortran_intrinsic_iso_c_binding") {
+                    set_iso_c_binding_kinds(al, asr, pass_options);
                 }
                 return asr;
             } else {

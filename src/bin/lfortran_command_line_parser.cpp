@@ -201,6 +201,7 @@ namespace LCompilers::CommandLineInterface {
         compiler_options.c_preprocessor = false;
         compiler_options.infer_mode = false;
         compiler_options.po.openmp = compiler_options.openmp;
+        LCompilers::set_c_abi_kinds(compiler_options.po, compiler_options.target);
         parser.opts = std::move(fast_opts);
         initialize_subcommands(parser);
         return true;
@@ -498,6 +499,7 @@ namespace LCompilers::CommandLineInterface {
         compiler_options.prescan = !opts.arg_no_prescan;
         // set openmp in pass options
         compiler_options.po.openmp = compiler_options.openmp;
+        LCompilers::set_c_abi_kinds(compiler_options.po, compiler_options.target);
         // The passes need to know too: a module compiled into an object file
         // of its own is defined there, so a translation unit that only uses
         // it must not define anything of the module itself.

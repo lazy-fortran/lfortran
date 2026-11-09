@@ -19378,9 +19378,15 @@ public:
         ASR::expr_t *arg = args[0];
         ASR::ttype_t *arg_type = ASRUtils::expr_type(arg);
         ASR::ttype_t *size_type = ASRUtils::TYPE(
-            ASR::make_Integer_t(al, x.base.base.loc, 8));
+            ASR::make_Integer_t(al, x.base.base.loc, compiler_options.po.c_pointer_kind));
         ASR::expr_t *value = nullptr;
         int64_t type_size = ASRUtils::get_type_byte_size(arg_type);
+        if (ASR::is_a<ASR::CPtr_t>(*ASRUtils::type_get_past_array(arg_type))) {
+            // get_type_byte_size assumes 64-bit pointers.
+            int64_t n = ASRUtils::is_array(arg_type)
+                ? ASRUtils::get_fixed_size_of_array(arg_type) : 1;
+            type_size = n > 0 ? compiler_options.po.c_pointer_kind * n : -1;
+        }
         if (type_size > 0) {
             value = ASRUtils::EXPR(ASR::make_IntegerConstant_t(
                 al, x.base.base.loc, type_size, size_type));

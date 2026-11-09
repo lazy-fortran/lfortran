@@ -58,6 +58,10 @@ struct PassOptions {
     std::vector<int64_t> skip_optimization_func_instantiation;
     bool module_name_mangling = false;
     bool intrinsic_module_name_mangling = false;
+    // Kinds of the iso_c_binding integers whose size follows the target C ABI:
+    // `long`, and the pointer-sized `size_t`, `intptr_t` and `ptrdiff_t`.
+    int c_long_kind = 8;
+    int c_pointer_kind = 8;
     bool global_symbols_mangling = false;
     bool intrinsic_symbols_mangling = false;
     bool all_symbols_mangling = false;
@@ -208,6 +212,10 @@ const int32_t LCOMPILERS_FE_OVERFLOW  = 4;
 const int32_t LCOMPILERS_FE_UNDERFLOW = 8;
 const int32_t LCOMPILERS_FE_INEXACT   = 16;
 const int32_t LCOMPILERS_FE_DENORMAL  = 32;
+
+// Sets the C ABI kinds in `po` for a target triple; an empty triple keeps the
+// 64-bit defaults of the host build.
+void set_c_abi_kinds(PassOptions &po, const std::string &target);
 
 } // namespace LCompilers
 

@@ -258,6 +258,19 @@ Platform get_platform()
 #endif
 }
 
+void set_c_abi_kinds(PassOptions &po, const std::string &target)
+{
+    std::string arch = target.substr(0, target.find('-'));
+    bool ilp32 = arch == "wasm32" || arch == "i386" || arch == "i486"
+        || arch == "i586" || arch == "i686" || arch == "riscv32"
+        || arch == "mips" || arch == "mipsel" || arch == "powerpc"
+        || arch == "sparc"
+        || ((startswith(arch, "arm") || startswith(arch, "thumb"))
+            && !startswith(arch, "arm64"));
+    po.c_long_kind = ilp32 ? 4 : 8;
+    po.c_pointer_kind = ilp32 ? 4 : 8;
+}
+
 // Platform-specific initialization
 // On Windows, enable colors in terminal. On other systems, do nothing.
 // Return value: 0 on success, negative number on failure.
