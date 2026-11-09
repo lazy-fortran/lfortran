@@ -4,6 +4,10 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@bin_op_real_dp.u = internal global double 0.000000e+00
+@bin_op_real_dp.v = internal global double 0.000000e+00
+@bin_op_real_dp.x = internal global float 0.000000e+00
+@bin_op_real_dp.zero = internal global float 0.000000e+00
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [12 x i8] c"R4,R8,R4,R8\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -13,16 +17,12 @@ define i32 @main(i32 %0, i8** %1) {
   %stringFormat_desc = alloca %string_descriptor, align 8
   %2 = call i8* @_lfortran_get_default_allocator()
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %u = alloca double, align 8
-  %v = alloca double, align 8
-  %x = alloca float, align 4
-  %zero = alloca float, align 4
-  store float 0x3FC24924A0000000, float* %zero, align 4
-  store double 0x3FC24924A0000000, double* %u, align 8
-  store double 0x3FC2492492492492, double* %v, align 8
-  store float 0x3FC24924A0000000, float* %x, align 4
+  store float 0x3FC24924A0000000, float* @bin_op_real_dp.zero, align 4
+  store double 0x3FC24924A0000000, double* @bin_op_real_dp.u, align 8
+  store double 0x3FC2492492492492, double* @bin_op_real_dp.v, align 8
+  store float 0x3FC24924A0000000, float* @bin_op_real_dp.x, align 4
   %3 = alloca i64, align 8
-  %4 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @serialization_info, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, float* %zero, double* %v, float* %x, double* %u)
+  %4 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @serialization_info, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, float* @bin_op_real_dp.zero, double* @bin_op_real_dp.v, float* @bin_op_real_dp.x, double* @bin_op_real_dp.u)
   %5 = load i64, i64* %3, align 8
   %6 = getelementptr %string_descriptor, %string_descriptor* %stringFormat_desc, i32 0, i32 0
   store i8* %4, i8** %6, align 8

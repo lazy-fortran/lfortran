@@ -5,6 +5,7 @@ target datalayout = "..."
 %string_descriptor = type { i8*, i64 }
 
 @__module___lcompilers_created__nested_context__closuretest__z = global i32 0
+@closuretest.z = internal global i32 0
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [3 x i8] c"I4\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -15,21 +16,20 @@ define i32 @main(i32 %0, i8** %1) {
   %2 = call i8* @_lfortran_get_default_allocator()
   %call_arg_value = alloca i32, align 4
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %z = alloca i32, align 4
-  store i32 0, i32* %z, align 4
+  store i32 0, i32* @closuretest.z, align 4
   br label %loop.head
 
 loop.head:                                        ; preds = %free_done, %.entry
-  %3 = load i32, i32* %z, align 4
+  %3 = load i32, i32* @closuretest.z, align 4
   %4 = add i32 %3, 1
   %5 = icmp sle i32 %4, 10
   br i1 %5, label %loop.body, label %loop.end
 
 loop.body:                                        ; preds = %loop.head
-  %6 = load i32, i32* %z, align 4
+  %6 = load i32, i32* @closuretest.z, align 4
   %7 = add i32 %6, 1
-  store i32 %7, i32* %z, align 4
-  %8 = load i32, i32* %z, align 4
+  store i32 %7, i32* @closuretest.z, align 4
+  %8 = load i32, i32* @closuretest.z, align 4
   store i32 %8, i32* @__module___lcompilers_created__nested_context__closuretest__z, align 4
   %9 = alloca i64, align 8
   store i32 1, i32* %call_arg_value, align 4
@@ -57,7 +57,7 @@ free_nonnull:                                     ; preds = %loop.body
 
 free_done:                                        ; preds = %free_nonnull, %loop.body
   %22 = load i32, i32* @__module___lcompilers_created__nested_context__closuretest__z, align 4
-  store i32 %22, i32* %z, align 4
+  store i32 %22, i32* @closuretest.z, align 4
   br label %loop.head
 
 loop.end:                                         ; preds = %loop.head

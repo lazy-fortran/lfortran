@@ -4,6 +4,11 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@associate_04.a = internal global float 0.000000e+00
+@associate_04.myreal = internal global float 0.000000e+00
+@associate_04.theta = internal global float 0.000000e+00
+@associate_04.x = internal global float 0.000000e+00
+@associate_04.y = internal global float 0.000000e+00
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [9 x i8] c"R4,R4,R4\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -38,16 +43,11 @@ define i32 @main(i32 %0, i8** %1) {
   %stringFormat_desc = alloca %string_descriptor, align 8
   %2 = call i8* @_lfortran_get_default_allocator()
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %a = alloca float, align 4
-  %myreal = alloca float, align 4
-  %theta = alloca float, align 4
-  %x = alloca float, align 4
-  %y = alloca float, align 4
-  store float 0x3FDAE147A0000000, float* %x, align 4
-  store float 0x3FD6666660000000, float* %y, align 4
-  store float 0x4022333340000000, float* %myreal, align 4
-  store float 1.500000e+00, float* %theta, align 4
-  store float 0x3FD99999A0000000, float* %a, align 4
+  store float 0x3FDAE147A0000000, float* @associate_04.x, align 4
+  store float 0x3FD6666660000000, float* @associate_04.y, align 4
+  store float 0x4022333340000000, float* @associate_04.myreal, align 4
+  store float 1.500000e+00, float* @associate_04.theta, align 4
+  store float 0x3FD99999A0000000, float* @associate_04.a, align 4
   br label %associate_block_start
 
 associate_block_start:                            ; preds = %.entry
@@ -55,23 +55,23 @@ associate_block_start:                            ; preds = %.entry
   %v = alloca float*, align 8
   store float* null, float** %v, align 8
   %z = alloca float, align 4
-  %4 = load float, float* %x, align 4
+  %4 = load float, float* @associate_04.x, align 4
   %5 = fmul float %4, 2.000000e+00
-  %6 = load float, float* %y, align 4
+  %6 = load float, float* @associate_04.y, align 4
   %7 = fmul float %6, 2.000000e+00
   %8 = fadd float %5, %7
   %9 = fneg float %8
-  %10 = call float @_lcompilers_cos_f32(float* %theta)
+  %10 = call float @_lcompilers_cos_f32(float* @associate_04.theta)
   %11 = fmul float %9, %10
   store float %11, float* %z, align 4
-  store float* %myreal, float** %v, align 8
+  store float* @associate_04.myreal, float** %v, align 8
   %12 = alloca i64, align 8
-  %13 = load float, float* %a, align 4
+  %13 = load float, float* @associate_04.a, align 4
   %14 = load float, float* %z, align 4
   %15 = fadd float %13, %14
   %16 = alloca float, align 4
   store float %15, float* %16, align 4
-  %17 = load float, float* %a, align 4
+  %17 = load float, float* @associate_04.a, align 4
   %18 = load float, float* %z, align 4
   %19 = fsub float %17, %18
   %20 = alloca float, align 4
@@ -110,7 +110,7 @@ associate_block_end:                              ; preds = %free_done
 FINALIZE_SYMTABLE_associate_block:                ; preds = %associate_block_end
   call void @llvm.stackrestore(i8* %3)
   %36 = alloca i64, align 8
-  %37 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @serialization_info.1, i32 0, i32 0), i64* %36, i32 0, i32 0, i32 0, i32 0, i32 0, float* %myreal)
+  %37 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @serialization_info.1, i32 0, i32 0), i64* %36, i32 0, i32 0, i32 0, i32 0, i32 0, float* @associate_04.myreal)
   %38 = load i64, i64* %36, align 8
   %39 = getelementptr %string_descriptor, %string_descriptor* %stringFormat_desc1, i32 0, i32 0
   store i8* %37, i8** %39, align 8
@@ -130,10 +130,10 @@ free_nonnull2:                                    ; preds = %FINALIZE_SYMTABLE_a
   br label %free_done3
 
 free_done3:                                       ; preds = %free_nonnull2, %FINALIZE_SYMTABLE_associate_block
-  %47 = load float, float* %myreal, align 4
+  %47 = load float, float* @associate_04.myreal, align 4
   %48 = fsub float %47, 0x4044EE1480000000
   %49 = fcmp ogt float %48, 0x3EE4F8B580000000
-  %50 = load float, float* %myreal, align 4
+  %50 = load float, float* @associate_04.myreal, align 4
   %51 = fsub float %50, 0x4044EE1480000000
   %52 = fcmp olt float %51, 0xBEE4F8B580000000
   %53 = or i1 %49, %52

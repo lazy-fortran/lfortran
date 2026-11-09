@@ -4,7 +4,11 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@intrinsics_03.a = internal global double 0.000000e+00
 @intrinsics_03.i = internal global i32 -12
+@intrinsics_03.r1 = internal global double 0.000000e+00
+@intrinsics_03.r2 = internal global double 0.000000e+00
+@intrinsics_03.x = internal global float 0.000000e+00
 @"ERROR STOP" = private unnamed_addr constant [11 x i8] c"ERROR STOP\00", align 1
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -45,13 +49,9 @@ define i32 @main(i32 %0, i8** %1) {
   %call_arg_value4 = alloca double, align 8
   %call_arg_value = alloca double, align 8
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %a = alloca double, align 8
-  %r1 = alloca double, align 8
-  %r2 = alloca double, align 8
-  %x = alloca float, align 4
-  store double 4.200000e+00, double* %a, align 8
-  store float 0xBFEFE8D5A0000000, float* %x, align 4
-  %3 = load float, float* %x, align 4
+  store double 4.200000e+00, double* @intrinsics_03.a, align 8
+  store float 0xBFEFE8D5A0000000, float* @intrinsics_03.x, align 4
+  %3 = load float, float* @intrinsics_03.x, align 4
   %4 = fadd float %3, 0x3FEFE8D5A0000000
   %5 = call float @llvm.fabs.f32(float %4)
   %6 = fcmp ogt float %5, 0x3E7AD7F2A0000000
@@ -67,7 +67,7 @@ else:                                             ; preds = %.entry
   br label %ifcont
 
 ifcont:                                           ; preds = %else, %then
-  %7 = call double @_lcompilers_cos_f64(double* %a)
+  %7 = call double @_lcompilers_cos_f64(double* @intrinsics_03.a)
   %8 = fadd double %7, 0x3FDF606EE0000000
   %9 = call double @llvm.fabs.f64(double %8)
   %10 = fcmp ogt double %9, 0x3E7AD7F2A0000000
@@ -83,8 +83,8 @@ else2:                                            ; preds = %ifcont
   br label %ifcont3
 
 ifcont3:                                          ; preds = %else2, %then1
-  %11 = load double, double* %a, align 8
-  %12 = call double @_lcompilers_cos_f64(double* %a)
+  %11 = load double, double* @intrinsics_03.a, align 8
+  %12 = call double @_lcompilers_cos_f64(double* @intrinsics_03.a)
   %13 = fadd double %11, %12
   store double %13, double* %call_arg_value, align 8
   %14 = call double @_lcompilers_cos_f64(double* %call_arg_value)
@@ -106,11 +106,11 @@ else6:                                            ; preds = %ifcont3
   br label %ifcont7
 
 ifcont7:                                          ; preds = %else6, %then5
-  %20 = call double @_lcompilers_cos_f64(double* %a)
-  store double %20, double* %r1, align 8
-  store double 0xBFDF606EEC8AC71E, double* %r2, align 8
-  %21 = load double, double* %r1, align 8
-  %22 = load double, double* %r2, align 8
+  %20 = call double @_lcompilers_cos_f64(double* @intrinsics_03.a)
+  store double %20, double* @intrinsics_03.r1, align 8
+  store double 0xBFDF606EEC8AC71E, double* @intrinsics_03.r2, align 8
+  %21 = load double, double* @intrinsics_03.r1, align 8
+  %22 = load double, double* @intrinsics_03.r2, align 8
   %23 = fsub double %21, %22
   %24 = call double @llvm.fabs.f64(double %23)
   %25 = fcmp ogt double %24, 1.000000e-15

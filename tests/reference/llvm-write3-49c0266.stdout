@@ -4,6 +4,7 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@main.nwrite = internal global i32 0
 @0 = private unnamed_addr constant [2 x i8] c" \00", align 1
 @1 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @string_const_data = private constant [11 x i8] c"Hello World"
@@ -22,10 +23,9 @@ define i32 @main(i32 %0, i8** %1) {
   %5 = call i8* @_lfortran_get_default_allocator()
   %6 = call i8* @_lfortran_malloc_alloc(i8* %5, i64 1)
   store i8* %6, i8** %4, align 8
-  %nwrite = alloca i32, align 4
-  store i32 6, i32* %nwrite, align 4
-  store i32 6, i32* %nwrite, align 4
-  %7 = load i32, i32* %nwrite, align 4
+  store i32 6, i32* @main.nwrite, align 4
+  store i32 6, i32* @main.nwrite, align 4
+  %7 = load i32, i32* @main.nwrite, align 4
   %8 = alloca i32*, align 8
   store i32* null, i32** %8, align 8
   %9 = load i32*, i32** %8, align 8

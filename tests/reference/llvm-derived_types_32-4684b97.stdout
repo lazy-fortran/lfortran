@@ -13,6 +13,7 @@ target datalayout = "..."
 @__Wrong_allocation = private unnamed_addr constant [51 x i8] c"Attempting to allocate already allocated variable!\00", align 1
 @string_const_data.1 = private constant [1 x i8] c" "
 @string_const.2 = private global %string_descriptor { i8* getelementptr inbounds ([1 x i8], [1 x i8]* @string_const_data.1, i32 0, i32 0), i64 1 }
+@main.value = internal global double 0.000000e+00
 @3 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info.3 = private unnamed_addr constant [10 x i8] c"S-DESC-K1\00", align 1
 @4 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -299,15 +300,14 @@ define i32 @main(i32 %0, i8** %1) {
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
   store %string_descriptor zeroinitializer, %string_descriptor* %__libasr__created__var__0_return_slot, align 8
   store %string_descriptor zeroinitializer, %string_descriptor* %__libasr__created__var__1_return_slot, align 8
-  %value = alloca double, align 8
-  store double 1.000000e+01, double* %value, align 8
+  store double 1.000000e+01, double* @main.value, align 8
   %3 = getelementptr %string_descriptor, %string_descriptor* %__libasr__created__var__0_return_slot, i32 0, i32 0
   %4 = getelementptr %string_descriptor, %string_descriptor* %__libasr__created__var__0_return_slot, i32 0, i32 1
   %5 = load i8*, i8** %3, align 8
   call void @_lfortran_free_alloc(i8* %2, i8* %5)
   store i8* null, i8** %3, align 8
   store i64 0, i64* %4, align 8
-  call void @__module_testdrive_derived_types_32_real_dp_to_string(double* %value, %string_descriptor* %__libasr__created__var__0_return_slot)
+  call void @__module_testdrive_derived_types_32_real_dp_to_string(double* @main.value, %string_descriptor* %__libasr__created__var__0_return_slot)
   %6 = alloca i64, align 8
   %7 = getelementptr %string_descriptor, %string_descriptor* %__libasr__created__var__0_return_slot, i32 0, i32 1
   %8 = load i64, i64* %7, align 8
@@ -340,7 +340,7 @@ free_done:                                        ; preds = %free_nonnull, %.ent
   call void @_lfortran_free_alloc(i8* %2, i8* %23)
   store i8* null, i8** %21, align 8
   store i64 0, i64* %22, align 8
-  call void @__module_testdrive_derived_types_32_real_dp_to_string(double* %value, %string_descriptor* %__libasr__created__var__1_return_slot)
+  call void @__module_testdrive_derived_types_32_real_dp_to_string(double* @main.value, %string_descriptor* %__libasr__created__var__1_return_slot)
   %24 = getelementptr %string_descriptor, %string_descriptor* %__libasr__created__var__1_return_slot, i32 0, i32 0
   %25 = load i8*, i8** %24, align 8
   %26 = getelementptr %string_descriptor, %string_descriptor* %__libasr__created__var__1_return_slot, i32 0, i32 1

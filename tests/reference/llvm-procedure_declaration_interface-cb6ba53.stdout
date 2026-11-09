@@ -6,6 +6,7 @@ target datalayout = "..."
 
 @__module___lcompilers_created__nested_context__example__target_value = global float 0.000000e+00
 @__module___lcompilers_created__nested_context__my_module__my_wrapper__fun = global float ()* null
+@example.target_value = internal global float 0.000000e+00
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [16 x i8] c"S-DESC-K1-31,R4\00", align 1
 @string_const_data = private constant [31 x i8] c"Via wrapper (should equal .5): "
@@ -94,9 +95,8 @@ define i32 @main(i32 %0, i8** %1) {
   %stringFormat_desc = alloca %string_descriptor, align 8
   %2 = call i8* @_lfortran_get_default_allocator()
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %target_value = alloca float, align 4
-  store float 5.000000e-01, float* %target_value, align 4
-  %3 = load float, float* %target_value, align 4
+  store float 5.000000e-01, float* @example.target_value, align 4
+  %3 = load float, float* @example.target_value, align 4
   store float %3, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
   %4 = alloca i64, align 8
   %5 = call float @__module_my_module_my_wrapper(float ()* @my_fun)
@@ -123,8 +123,8 @@ free_nonnull:                                     ; preds = %.entry
 
 free_done:                                        ; preds = %free_nonnull, %.entry
   %17 = load float, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
-  store float %17, float* %target_value, align 4
-  %18 = load float, float* %target_value, align 4
+  store float %17, float* @example.target_value, align 4
+  %18 = load float, float* @example.target_value, align 4
   store float %18, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
   %19 = alloca i64, align 8
   %20 = call float @my_fun()
@@ -151,8 +151,8 @@ free_nonnull2:                                    ; preds = %free_done
 
 free_done3:                                       ; preds = %free_nonnull2, %free_done
   %32 = load float, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
-  store float %32, float* %target_value, align 4
-  %33 = load float, float* %target_value, align 4
+  store float %32, float* @example.target_value, align 4
+  %33 = load float, float* @example.target_value, align 4
   store float %33, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
   %34 = call float @__module_my_module_my_wrapper(float ()* @my_fun)
   %35 = fsub float %34, 5.000000e-01
@@ -163,7 +163,7 @@ free_done3:                                       ; preds = %free_nonnull2, %fre
 
 then:                                             ; preds = %free_done3
   %38 = load float, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
-  store float %38, float* %target_value, align 4
+  store float %38, float* @example.target_value, align 4
   call void (i8*, ...) @_lcompilers_print_error(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @5, i32 0, i32 0), i8* getelementptr inbounds ([11 x i8], [11 x i8]* @"ERROR STOP", i32 0, i32 0), i8* getelementptr inbounds ([2 x i8], [2 x i8]* @4, i32 0, i32 0))
   call void @_lfortran_internal_alloc_finalize()
   call void @exit(i32 1)
@@ -171,11 +171,11 @@ then:                                             ; preds = %free_done3
 
 else:                                             ; preds = %free_done3
   %39 = load float, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
-  store float %39, float* %target_value, align 4
+  store float %39, float* @example.target_value, align 4
   br label %ifcont
 
 ifcont:                                           ; preds = %else, %then
-  %40 = load float, float* %target_value, align 4
+  %40 = load float, float* @example.target_value, align 4
   store float %40, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
   %41 = call float @my_fun()
   %42 = fsub float %41, 5.000000e-01
@@ -186,7 +186,7 @@ ifcont:                                           ; preds = %else, %then
 
 then4:                                            ; preds = %ifcont
   %45 = load float, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
-  store float %45, float* %target_value, align 4
+  store float %45, float* @example.target_value, align 4
   call void (i8*, ...) @_lcompilers_print_error(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @7, i32 0, i32 0), i8* getelementptr inbounds ([11 x i8], [11 x i8]* @"ERROR STOP", i32 0, i32 0), i8* getelementptr inbounds ([2 x i8], [2 x i8]* @6, i32 0, i32 0))
   call void @_lfortran_internal_alloc_finalize()
   call void @exit(i32 1)
@@ -194,7 +194,7 @@ then4:                                            ; preds = %ifcont
 
 else5:                                            ; preds = %ifcont
   %46 = load float, float* @__module___lcompilers_created__nested_context__example__target_value, align 4
-  store float %46, float* %target_value, align 4
+  store float %46, float* @example.target_value, align 4
   br label %ifcont6
 
 ifcont6:                                          ; preds = %else5, %then4

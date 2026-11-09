@@ -5,6 +5,7 @@ target datalayout = "..."
 %string_descriptor = type { i8*, i64 }
 %"~unlimited_polymorphic_type" = type <{ i32 (...)**, i8* }>
 
+@unlimited_polymorphic_intrinsic_type_allocate.x = internal global i64 0
 @_Type_Info_integer_8 = linkonce_odr unnamed_addr constant { i8*, i8*, i8* } { i8* inttoptr (i32 8 to i8*), i8* inttoptr (i64 8 to i8*), i8* null }, align 8
 @_VTable_integer_8 = linkonce_odr unnamed_addr constant { [5 x i8*] } { [5 x i8*] [i8* null, i8* bitcast ({ i8*, i8*, i8* }* @_Type_Info_integer_8 to i8*), i8* bitcast (void (i8*, i8*)* @_copy_integer_8 to i8*), i8* bitcast (void (i8**)* @_allocate_integer_8 to i8*), i8* bitcast (void (i8*)* @finalize_i64_for_UPoly to i8*)] }, align 8
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
@@ -31,8 +32,7 @@ define i32 @main(i32 %0, i8** %1) {
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
   %var = alloca %"~unlimited_polymorphic_type"*, align 8
   store %"~unlimited_polymorphic_type"* null, %"~unlimited_polymorphic_type"** %var, align 8
-  %x = alloca i64, align 8
-  store i64 10, i64* %x, align 8
+  store i64 10, i64* @unlimited_polymorphic_intrinsic_type_allocate.x, align 8
   %2 = call i8* @_lfortran_get_default_allocator()
   %3 = call i8* @_lfortran_malloc_alloc(i8* %2, i64 8)
   call void @llvm.memset.p0i8.i32(i8* %3, i8 0, i32 8, i1 false)
@@ -48,7 +48,7 @@ define i32 @main(i32 %0, i8** %1) {
   %10 = bitcast i8* %9 to i64*
   %11 = bitcast %"~unlimited_polymorphic_type"* %6 to i32 (...)***
   store i32 (...)** bitcast (i8** getelementptr inbounds ({ [5 x i8*] }, { [5 x i8*] }* @_VTable_integer_8, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %11, align 8
-  %12 = load i64, i64* %x, align 8
+  %12 = load i64, i64* @unlimited_polymorphic_intrinsic_type_allocate.x, align 8
   store i64 %12, i64* %10, align 8
   %13 = alloca i1, align 1
   %14 = load %"~unlimited_polymorphic_type"*, %"~unlimited_polymorphic_type"** %var, align 8

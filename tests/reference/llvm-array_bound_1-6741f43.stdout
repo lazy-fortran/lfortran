@@ -4,6 +4,10 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@array_bound_1.a = internal global [196 x i32] zeroinitializer
+@array_bound_1.b = internal global [96 x i32] zeroinitializer
+@array_bound_1.c = internal global [35 x i32] zeroinitializer
+@array_bound_1.d = internal global [4 x i32] zeroinitializer
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [9 x i8] c"I4,I4,I4\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -41,10 +45,6 @@ define i32 @main(i32 %0, i8** %1) {
   %stringFormat_desc = alloca %string_descriptor, align 8
   %2 = call i8* @_lfortran_get_default_allocator()
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %a = alloca [196 x i32], align 4
-  %b = alloca [96 x i32], align 4
-  %c = alloca [35 x i32], align 4
-  %d = alloca [4 x i32], align 4
   %3 = alloca i64, align 8
   %4 = alloca i32, align 4
   store i32 2, i32* %4, align 4

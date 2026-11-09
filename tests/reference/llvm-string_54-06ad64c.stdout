@@ -7,6 +7,7 @@ target datalayout = "..."
 @"ERROR STOP" = private unnamed_addr constant [11 x i8] c"ERROR STOP\00", align 1
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
+@string_54.x = internal global i32 0
 @2 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @3 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
 
@@ -80,9 +81,8 @@ define i32 @main(i32 %0, i8** %1) {
   %5 = call i8* @_lfortran_get_default_allocator()
   %6 = call i8* @_lfortran_malloc_alloc(i8* %5, i64 10)
   store i8* %6, i8** %4, align 8
-  %x = alloca i32, align 4
-  store i32 10, i32* %x, align 4
-  call void @__module_string_54_mod_foo_sub(i32* %x, %string_descriptor* %char)
+  store i32 10, i32* @string_54.x, align 4
+  call void @__module_string_54_mod_foo_sub(i32* @string_54.x, %string_descriptor* %char)
   br i1 false, label %then, label %else
 
 then:                                             ; preds = %.entry

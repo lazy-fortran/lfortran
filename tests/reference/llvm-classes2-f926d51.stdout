@@ -2,11 +2,14 @@
 source_filename = "LFortran"
 target datalayout = "..."
 
-%defs.point.3_class = type <{ i32 (...)**, %defs.point.3* }>
-%defs.point.3 = type {}
-%defs.point2d.5_class = type <{ i32 (...)**, %defs.point2d.5* }>
 %defs.point2d.5 = type { %defs.point.3, float, float }
+%defs.point.3 = type {}
+%defs.point.3_class = type <{ i32 (...)**, %defs.point.3* }>
+%defs.point2d.5_class = type <{ i32 (...)**, %defs.point2d.5* }>
 
+@main.p2d = internal global %defs.point2d.5 zeroinitializer
+@main.p2d.__struct_init = internal global i1 false
+@main.res = internal global float 0.000000e+00
 @_Name_point = private unnamed_addr constant [6 x i8] c"point\00", align 1
 @_Type_Info_point = linkonce_odr unnamed_addr constant { i8*, i8*, i8* } { i8* getelementptr inbounds ([6 x i8], [6 x i8]* @_Name_point, i32 0, i32 0), i8* null, i8* null }, align 8
 @_VTable_point = linkonce_odr unnamed_addr constant { [6 x i8*] } { [6 x i8*] [i8* null, i8* bitcast ({ i8*, i8*, i8* }* @_Type_Info_point to i8*), i8* bitcast (void (i8*, i8*)* @_copy_defs_point to i8*), i8* bitcast (void (i8**)* @_allocate_struct_defs_point to i8*), i8* bitcast (void (i8*)* @finalize_StructType__point_3_of_defs_for_UPoly to i8*), i8* null] }, align 8
@@ -50,49 +53,49 @@ define i32 @main(i32 %0, i8** %1) {
 .entry:
   %2 = call i8* @_lfortran_get_default_allocator()
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %p2d = alloca %defs.point2d.5, align 8
-  %3 = getelementptr %defs.point2d.5, %defs.point2d.5* %p2d, i32 0, i32 1
-  %4 = getelementptr %defs.point2d.5, %defs.point2d.5* %p2d, i32 0, i32 2
-  %5 = getelementptr %defs.point2d.5, %defs.point2d.5* %p2d, i32 0, i32 0
+  %3 = load i1, i1* @main.p2d.__struct_init, align 1
+  br i1 %3, label %struct_init_done, label %struct_init
+
+struct_init:                                      ; preds = %.entry
+  store i1 true, i1* @main.p2d.__struct_init, align 1
+  br label %struct_init_done
+
+struct_init_done:                                 ; preds = %struct_init, %.entry
   %ptr = alloca %defs.point.3_class*, align 8
   store %defs.point.3_class* null, %defs.point.3_class** %ptr, align 8
-  %res = alloca float, align 4
-  %6 = getelementptr %defs.point2d.5, %defs.point2d.5* %p2d, i32 0, i32 1
-  store float 3.000000e+00, float* %6, align 4
-  %7 = getelementptr %defs.point2d.5, %defs.point2d.5* %p2d, i32 0, i32 2
-  store float 4.000000e+00, float* %7, align 4
-  %8 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
-  %9 = icmp eq %defs.point.3_class* %8, null
-  br i1 %9, label %then, label %else
+  store float 3.000000e+00, float* getelementptr inbounds (%defs.point2d.5, %defs.point2d.5* @main.p2d, i32 0, i32 1), align 4
+  store float 4.000000e+00, float* getelementptr inbounds (%defs.point2d.5, %defs.point2d.5* @main.p2d, i32 0, i32 2), align 4
+  %4 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
+  %5 = icmp eq %defs.point.3_class* %4, null
+  br i1 %5, label %then, label %else
 
-then:                                             ; preds = %.entry
-  %10 = call i8* @_lfortran_get_default_allocator()
-  %11 = call i8* @_lfortran_malloc_alloc(i8* %10, i64 16)
-  call void @llvm.memset.p0i8.i32(i8* %11, i8 0, i32 16, i1 false)
-  %12 = bitcast i8* %11 to %defs.point.3_class*
-  store %defs.point.3_class* %12, %defs.point.3_class** %ptr, align 8
+then:                                             ; preds = %struct_init_done
+  %6 = call i8* @_lfortran_get_default_allocator()
+  %7 = call i8* @_lfortran_malloc_alloc(i8* %6, i64 16)
+  call void @llvm.memset.p0i8.i32(i8* %7, i8 0, i32 16, i1 false)
+  %8 = bitcast i8* %7 to %defs.point.3_class*
+  store %defs.point.3_class* %8, %defs.point.3_class** %ptr, align 8
   br label %ifcont
 
-else:                                             ; preds = %.entry
+else:                                             ; preds = %struct_init_done
   br label %ifcont
 
 ifcont:                                           ; preds = %else, %then
-  %13 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
-  %14 = bitcast %defs.point.3_class* %13 to i32 (...)***
-  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [6 x i8*] }, { [6 x i8*] }* @_VTable_point2d, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %14, align 8
-  %15 = getelementptr %defs.point.3_class, %defs.point.3_class* %13, i32 0, i32 1
-  %16 = bitcast %defs.point2d.5* %p2d to %defs.point.3*
-  store %defs.point.3* %16, %defs.point.3** %15, align 8
-  %17 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
-  %18 = bitcast %defs.point.3_class* %17 to float (%defs.point.3_class*)***
-  %19 = load float (%defs.point.3_class*)**, float (%defs.point.3_class*)*** %18, align 8
-  %20 = getelementptr inbounds float (%defs.point.3_class*)*, float (%defs.point.3_class*)** %19, i32 3
-  %21 = load float (%defs.point.3_class*)*, float (%defs.point.3_class*)** %20, align 8
-  %22 = call float %21(%defs.point.3_class* %17)
-  store float %22, float* %res, align 4
-  %23 = load float, float* %res, align 4
-  %24 = fcmp une float %23, 5.000000e+00
-  br i1 %24, label %then1, label %else2
+  %9 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
+  %10 = bitcast %defs.point.3_class* %9 to i32 (...)***
+  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [6 x i8*] }, { [6 x i8*] }* @_VTable_point2d, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %10, align 8
+  %11 = getelementptr %defs.point.3_class, %defs.point.3_class* %9, i32 0, i32 1
+  store %defs.point.3* getelementptr inbounds (%defs.point2d.5, %defs.point2d.5* @main.p2d, i32 0, i32 0), %defs.point.3** %11, align 8
+  %12 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
+  %13 = bitcast %defs.point.3_class* %12 to float (%defs.point.3_class*)***
+  %14 = load float (%defs.point.3_class*)**, float (%defs.point.3_class*)*** %13, align 8
+  %15 = getelementptr inbounds float (%defs.point.3_class*)*, float (%defs.point.3_class*)** %14, i32 3
+  %16 = load float (%defs.point.3_class*)*, float (%defs.point.3_class*)** %15, align 8
+  %17 = call float %16(%defs.point.3_class* %12)
+  store float %17, float* @main.res, align 4
+  %18 = load float, float* @main.res, align 4
+  %19 = fcmp une float %18, 5.000000e+00
+  br i1 %19, label %then1, label %else2
 
 then1:                                            ; preds = %ifcont
   call void (i8*, ...) @_lcompilers_print_error(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @1, i32 0, i32 0), i8* getelementptr inbounds ([11 x i8], [11 x i8]* @"ERROR STOP", i32 0, i32 0), i8* getelementptr inbounds ([2 x i8], [2 x i8]* @0, i32 0, i32 0))
@@ -113,13 +116,13 @@ FINALIZE_SYMTABLE_main:                           ; preds = %return
   br label %Finalize_Variable_ptr
 
 Finalize_Variable_ptr:                            ; preds = %FINALIZE_SYMTABLE_main
-  %25 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
-  %26 = icmp ne %defs.point.3_class* %25, null
-  br i1 %26, label %is_allocated.then, label %is_allocated.else
+  %20 = load %defs.point.3_class*, %defs.point.3_class** %ptr, align 8
+  %21 = icmp ne %defs.point.3_class* %20, null
+  br i1 %21, label %is_allocated.then, label %is_allocated.else
 
 is_allocated.then:                                ; preds = %Finalize_Variable_ptr
-  %27 = bitcast %defs.point.3_class* %25 to i8*
-  call void @_lfortran_free_alloc(i8* %2, i8* %27)
+  %22 = bitcast %defs.point.3_class* %20 to i8*
+  call void @_lfortran_free_alloc(i8* %2, i8* %22)
   br label %is_allocated.ifcont
 
 is_allocated.else:                                ; preds = %Finalize_Variable_ptr

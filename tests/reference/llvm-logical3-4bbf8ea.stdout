@@ -4,6 +4,8 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@logical3.a = internal global i32 0
+@logical3.b = internal global i32 0
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @string_const_data = private constant [26 x i8] c"Line 1 - Condition is true"
 @string_const = private global %string_descriptor { i8* getelementptr inbounds ([26 x i8], [26 x i8]* @string_const_data, i32 0, i32 0), i64 26 }
@@ -99,12 +101,10 @@ target datalayout = "..."
 define i32 @main(i32 %0, i8** %1) {
 .entry:
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %a = alloca i32, align 4
-  %b = alloca i32, align 4
-  store i32 1, i32* %a, align 4
-  store i32 0, i32* %b, align 4
-  %2 = load i32, i32* %a, align 4
-  %3 = load i32, i32* %b, align 4
+  store i32 1, i32* @logical3.a, align 4
+  store i32 0, i32* @logical3.b, align 4
+  %2 = load i32, i32* @logical3.a, align 4
+  %3 = load i32, i32* @logical3.b, align 4
   %4 = and i32 %2, %3
   %5 = icmp ne i32 %4, 0
   br i1 %5, label %then, label %else
@@ -123,8 +123,8 @@ else:                                             ; preds = %.entry
   br label %ifcont
 
 ifcont:                                           ; preds = %else, %then
-  %8 = load i32, i32* %a, align 4
-  %9 = load i32, i32* %b, align 4
+  %8 = load i32, i32* @logical3.a, align 4
+  %9 = load i32, i32* @logical3.b, align 4
   %10 = or i32 %8, %9
   %11 = icmp ne i32 %10, 0
   br i1 %11, label %then1, label %else2
@@ -143,8 +143,8 @@ else2:                                            ; preds = %ifcont
   br label %ifcont3
 
 ifcont3:                                          ; preds = %else2, %then1
-  %14 = load i32, i32* %a, align 4
-  %15 = load i32, i32* %b, align 4
+  %14 = load i32, i32* @logical3.a, align 4
+  %15 = load i32, i32* @logical3.b, align 4
   %16 = xor i32 %14, %15
   %17 = icmp ne i32 %16, 0
   br i1 %17, label %then4, label %else5
@@ -163,10 +163,10 @@ else5:                                            ; preds = %ifcont3
   br label %ifcont6
 
 ifcont6:                                          ; preds = %else5, %then4
-  store i32 0, i32* %a, align 4
-  store i32 1, i32* %b, align 4
-  %20 = load i32, i32* %a, align 4
-  %21 = load i32, i32* %b, align 4
+  store i32 0, i32* @logical3.a, align 4
+  store i32 1, i32* @logical3.b, align 4
+  %20 = load i32, i32* @logical3.a, align 4
+  %21 = load i32, i32* @logical3.b, align 4
   %22 = and i32 %20, %21
   %23 = xor i32 %22, 1
   %24 = icmp ne i32 %23, 0
@@ -186,8 +186,8 @@ else8:                                            ; preds = %ifcont6
   br label %ifcont9
 
 ifcont9:                                          ; preds = %else8, %then7
-  %27 = load i32, i32* %b, align 4
-  %28 = load i32, i32* %a, align 4
+  %27 = load i32, i32* @logical3.b, align 4
+  %28 = load i32, i32* @logical3.a, align 4
   %29 = xor i32 %27, %28
   %30 = icmp ne i32 %29, 0
   br i1 %30, label %then10, label %else11
@@ -206,8 +206,8 @@ else11:                                           ; preds = %ifcont9
   br label %ifcont12
 
 ifcont12:                                         ; preds = %else11, %then10
-  %33 = load i32, i32* %b, align 4
-  %34 = load i32, i32* %a, align 4
+  %33 = load i32, i32* @logical3.b, align 4
+  %34 = load i32, i32* @logical3.a, align 4
   %35 = xor i32 %33, %34
   %36 = xor i32 %35, 1
   %37 = icmp ne i32 %36, 0
@@ -227,10 +227,10 @@ else14:                                           ; preds = %ifcont12
   br label %ifcont15
 
 ifcont15:                                         ; preds = %else14, %then13
-  store i32 1, i32* %a, align 4
-  store i32 1, i32* %b, align 4
-  %40 = load i32, i32* %a, align 4
-  %41 = load i32, i32* %b, align 4
+  store i32 1, i32* @logical3.a, align 4
+  store i32 1, i32* @logical3.b, align 4
+  %40 = load i32, i32* @logical3.a, align 4
+  %41 = load i32, i32* @logical3.b, align 4
   %42 = and i32 %40, %41
   %43 = icmp ne i32 %42, 0
   br i1 %43, label %then16, label %else17
@@ -249,8 +249,8 @@ else17:                                           ; preds = %ifcont15
   br label %ifcont18
 
 ifcont18:                                         ; preds = %else17, %then16
-  %46 = load i32, i32* %a, align 4
-  %47 = load i32, i32* %b, align 4
+  %46 = load i32, i32* @logical3.a, align 4
+  %47 = load i32, i32* @logical3.b, align 4
   %48 = or i32 %46, %47
   %49 = icmp ne i32 %48, 0
   br i1 %49, label %then19, label %else20
@@ -269,8 +269,8 @@ else20:                                           ; preds = %ifcont18
   br label %ifcont21
 
 ifcont21:                                         ; preds = %else20, %then19
-  %52 = load i32, i32* %a, align 4
-  %53 = load i32, i32* %b, align 4
+  %52 = load i32, i32* @logical3.a, align 4
+  %53 = load i32, i32* @logical3.b, align 4
   %54 = xor i32 %52, %53
   %55 = icmp ne i32 %54, 0
   br i1 %55, label %then22, label %else23

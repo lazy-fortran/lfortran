@@ -7272,6 +7272,24 @@ public:
             allocate_array_members_of_struct_arrays(st.expr, st.ptr, st.var_type);
         }
         struct_array_global_members_details.clear();
+        // Variables of a main program implicitly have the SAVE attribute
+        // (F2018 8.5.16); internal procedures and callbacks may use them
+        // after the program body has returned (e.g. under emscripten).
+        // Strings and polymorphic variables stay automatic: their explicit
+        // SAVE lowering is not yet complete.
+        std::vector<ASR::Variable_t*> implicitly_saved;
+        for (auto &item : x.m_symtab->get_scope()) {
+            if (ASR::is_a<ASR::Variable_t>(*item.second)) {
+                ASR::Variable_t* v = ASR::down_cast<ASR::Variable_t>(item.second);
+                if (v->m_storage == ASR::storage_typeType::Default &&
+                        v->m_intent == ASRUtils::intent_local &&
+                        !ASRUtils::is_character(*v->m_type) &&
+                        !ASRUtils::is_class_type(ASRUtils::extract_type(v->m_type))) {
+                    v->m_storage = ASR::storage_typeType::Save;
+                    implicitly_saved.push_back(v);
+                }
+            }
+        }
         declare_vars(x);
         for(variable_inital_value var_to_initalize : variable_inital_value_vec){
             set_VariableInital_value(var_to_initalize.v, var_to_initalize.target_var);
@@ -7283,6 +7301,14 @@ public:
         }
         if (compiler_options.emit_debug_info) debug_emit_loc(x);
         start_new_block(proc_return);
+        if (compiler_options.detect_leaks) {
+            // Free them like module variables, for a clean leak report.
+            for (ASR::Variable_t* v : implicitly_saved) {
+                if (ASRUtils::is_allocatable(v->m_type)) {
+                    v->m_storage = ASR::storage_typeType::Default;
+                }
+            }
+        }
         llvm_symtab_finalizer.finalize_symtab(x.m_symtab);
         finalize_list_call_arg_allocas();
         // Free globals if detecting leaks is ON, to print clean report
@@ -7420,7 +7446,12 @@ public:
         llvm::Value* ptr_ = nullptr;
         bool pointer_null_array_init = has_pointer_null_array_initializer(expr);
         if( is_malloc_array_type && !is_list && !is_data_only ) {
-            ptr_ = arr_descr->create_descriptor_alloca(type_, "arr_desc");
+            // A descriptor held by a global must outlive the current frame.
+            if (llvm::isa<llvm::GlobalVariable>(ptr->stripPointerCasts())) {
+                ptr_ = create_null_array_descriptor_global(type_, "arr_desc");
+            } else {
+                ptr_ = arr_descr->create_descriptor_alloca(type_, "arr_desc");
+            }
             if(ASRUtils::is_character(*m_type)){
                 if (pointer_null_array_init) {
                     arr_descr->reset_is_allocated_flag(type_, ptr_, llvm_data_type);

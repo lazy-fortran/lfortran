@@ -3,8 +3,8 @@ source_filename = "LFortran"
 target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
-%class_circle1.circle.3_class = type <{ i32 (...)**, %class_circle1.circle.3* }>
 %class_circle1.circle.3 = type { float }
+%class_circle1.circle.3_class = type <{ i32 (...)**, %class_circle1.circle.3* }>
 
 @__module_class_circle1_pi = global float 0x400921FB60000000
 @_Name_circle = private unnamed_addr constant [7 x i8] c"circle\00", align 1
@@ -17,6 +17,8 @@ target datalayout = "..."
 @string_const_data.1 = private constant [8 x i8] c" area = "
 @string_const.2 = private global %string_descriptor { i8* getelementptr inbounds ([8 x i8], [8 x i8]* @string_const_data.1, i32 0, i32 0), i64 8 }
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
+@circle_test.c = internal global %class_circle1.circle.3 zeroinitializer
+@circle_test.c.__struct_init = internal global i1 false
 
 define float @__module_class_circle1_circle_area(%class_circle1.circle.3_class* %this) {
 .entry:
@@ -150,25 +152,29 @@ define i32 @main(i32 %0, i8** %1) {
   %2 = alloca %class_circle1.circle.3_class, align 8
   %3 = alloca %class_circle1.circle.3_class, align 8
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %c = alloca %class_circle1.circle.3, align 8
-  %4 = getelementptr %class_circle1.circle.3, %class_circle1.circle.3* %c, i32 0, i32 0
-  %5 = getelementptr %class_circle1.circle.3, %class_circle1.circle.3* %c, i32 0, i32 0
-  store float 1.500000e+00, float* %5, align 4
-  %6 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %3, i32 0, i32 0
-  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [7 x i8*] }, { [7 x i8*] }* @_VTable_circle, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %6, align 8
-  %7 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %3, i32 0, i32 1
-  store %class_circle1.circle.3* %c, %class_circle1.circle.3** %7, align 8
+  %4 = load i1, i1* @circle_test.c.__struct_init, align 1
+  br i1 %4, label %struct_init_done, label %struct_init
+
+struct_init:                                      ; preds = %.entry
+  store i1 true, i1* @circle_test.c.__struct_init, align 1
+  br label %struct_init_done
+
+struct_init_done:                                 ; preds = %struct_init, %.entry
+  store float 1.500000e+00, float* getelementptr inbounds (%class_circle1.circle.3, %class_circle1.circle.3* @circle_test.c, i32 0, i32 0), align 4
+  %5 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %3, i32 0, i32 0
+  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [7 x i8*] }, { [7 x i8*] }* @_VTable_circle, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %5, align 8
+  %6 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %3, i32 0, i32 1
+  store %class_circle1.circle.3* @circle_test.c, %class_circle1.circle.3** %6, align 8
   call void @__module_class_circle1_circle_print(%class_circle1.circle.3_class* %3)
-  %8 = getelementptr %class_circle1.circle.3, %class_circle1.circle.3* %c, i32 0, i32 0
-  store float 2.000000e+00, float* %8, align 4
-  %9 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %2, i32 0, i32 0
-  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [7 x i8*] }, { [7 x i8*] }* @_VTable_circle, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %9, align 8
-  %10 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %2, i32 0, i32 1
-  store %class_circle1.circle.3* %c, %class_circle1.circle.3** %10, align 8
+  store float 2.000000e+00, float* getelementptr inbounds (%class_circle1.circle.3, %class_circle1.circle.3* @circle_test.c, i32 0, i32 0), align 4
+  %7 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %2, i32 0, i32 0
+  store i32 (...)** bitcast (i8** getelementptr inbounds ({ [7 x i8*] }, { [7 x i8*] }* @_VTable_circle, i32 0, i32 0, i32 2) to i32 (...)**), i32 (...)*** %7, align 8
+  %8 = getelementptr %class_circle1.circle.3_class, %class_circle1.circle.3_class* %2, i32 0, i32 1
+  store %class_circle1.circle.3* @circle_test.c, %class_circle1.circle.3** %8, align 8
   call void @__module_class_circle1_circle_print(%class_circle1.circle.3_class* %2)
   br label %return
 
-return:                                           ; preds = %.entry
+return:                                           ; preds = %struct_init_done
   br label %FINALIZE_SYMTABLE_circle_test
 
 FINALIZE_SYMTABLE_circle_test:                    ; preds = %return
