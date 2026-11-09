@@ -7304,9 +7304,7 @@ public:
         if (compiler_options.detect_leaks) {
             // Free them like module variables, for a clean leak report.
             for (ASR::Variable_t* v : implicitly_saved) {
-                if (ASRUtils::is_allocatable(v->m_type)) {
-                    v->m_storage = ASR::storage_typeType::Default;
-                }
+                v->m_storage = ASR::storage_typeType::Default;
             }
         }
         llvm_symtab_finalizer.finalize_symtab(x.m_symtab);
