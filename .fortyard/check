@@ -34,5 +34,11 @@ cp pixi.lock "$state/pixi.lock.$key"
 echo "build passed"
 run tests pixi run -e llvm11 tests -j "$jobs"
 echo "reference tests passed"
-run integration pixi run -e llvm11 integration_tests -b llvm --smoke -j "$jobs"
-echo "integration tests (LLVM, smoke selection) passed"
+# Landings run upstream's smoke selection; .fortyard/verify runs them all.
+if [ "${FY_CHECK_INTEGRATION:-smoke}" = full ]; then
+    run integration pixi run -e llvm11 integration_tests -b llvm -j "$jobs"
+    echo "integration tests (LLVM, all) passed"
+else
+    run integration pixi run -e llvm11 integration_tests -b llvm --smoke -j "$jobs"
+    echo "integration tests (LLVM, smoke selection) passed"
+fi

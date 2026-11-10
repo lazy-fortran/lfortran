@@ -32,6 +32,9 @@ selection of the integration tests. The runner keeps the build tree, the
 pixi environments and sccache between checks, so a check takes about two
 minutes. GitHub Actions run upstream's full workflows after each push to
 `main`, as advisory coverage of all platforms and LLVM versions.
+After each landing fortyard also verifies `main` with `.fortyard/verify`, the
+same check with all integration tests; a regression it finds is bisected to
+its commit and reported as an issue.
 
 ## Syncing with upstream
 
