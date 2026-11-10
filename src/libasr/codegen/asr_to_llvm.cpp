@@ -8782,6 +8782,34 @@ public:
             emit_allocatable_global_array_setup();
         }
         emit_global_struct_members_setup();
+        // Variables of a main program implicitly have the SAVE attribute
+        // (F2018 8.5.16); internal procedures and callbacks may use them
+        // after the program body has returned (e.g. under emscripten).
+        // Polymorphic variables and strings other than deferred-length
+        // allocatables and constant-length non-allocatables stay automatic:
+        // their SAVE lowering is not yet complete.
+        auto fixed_size = [](ASR::ttype_t* t) {
+            if (!ASRUtils::is_character(*t)) return true;
+            ASR::String_t* s = ASRUtils::get_string_type(t);
+            if (ASRUtils::is_allocatable(t)) {
+                return s->m_len_kind == ASR::string_length_kindType::DeferredLength;
+            }
+            return s->m_len_kind == ASR::string_length_kindType::ExpressionLength &&
+                ASRUtils::is_value_constant(s->m_len);
+        };
+        std::vector<ASR::Variable_t*> implicitly_saved;
+        for (auto &item : x.m_symtab->get_scope()) {
+            if (ASR::is_a<ASR::Variable_t>(*item.second)) {
+                ASR::Variable_t* v = ASR::down_cast<ASR::Variable_t>(item.second);
+                if (v->m_storage == ASR::storage_typeType::Default &&
+                        v->m_intent == ASRUtils::intent_local &&
+                        fixed_size(v->m_type) &&
+                        !ASRUtils::is_class_type(ASRUtils::extract_type(v->m_type))) {
+                    v->m_storage = ASR::storage_typeType::Save;
+                    implicitly_saved.push_back(v);
+                }
+            }
+        }
         declare_vars(x);
         for(variable_inital_value var_to_initalize : variable_inital_value_vec){
             set_VariableInital_value(var_to_initalize.v, var_to_initalize.target_var);
@@ -8793,6 +8821,12 @@ public:
         }
         if (compiler_options.emit_debug_info) debug_emit_loc(x);
         start_new_block(proc_return);
+        if (compiler_options.detect_leaks) {
+            // Free them like module variables, for a clean leak report.
+            for (ASR::Variable_t* v : implicitly_saved) {
+                v->m_storage = ASR::storage_typeType::Default;
+            }
+        }
         // The variables of the main program, and those of modules, are not
         // finalized when the program terminates (F2018 7.5.6.4): their
         // memory is freed without calling final subroutines.

@@ -35,6 +35,7 @@ target datalayout = "..."
 @26 = private unnamed_addr constant { i8*, { i8, i8*, { i8*, i32, i32, i32, i32 }*, i32 }*, i32 } { i8* getelementptr inbounds ([118 x i8], [118 x i8]* @6, i32 0, i32 0), { i8, i8*, { i8*, i32, i32, i32, i32 }*, i32 }* getelementptr inbounds ([1 x { i8, i8*, { i8*, i32, i32, i32, i32 }*, i32 }], [1 x { i8, i8*, { i8*, i32, i32, i32, i32 }*, i32 }]* @25, i32 0, i32 0), i32 1 }
 @27 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @28 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
+@main.__1_k = internal global i32 0
 @main.b = internal global [3 x i32] zeroinitializer
 @main.n = internal global i32 3
 @29 = private unnamed_addr constant [2 x i8] c"b\00", align 1
@@ -50,9 +51,8 @@ target datalayout = "..."
 define i32 @main(i32 %0, i8** %1) {
 .entry:
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %__1_k = alloca i32, align 4
-  store i32 1, i32* %__1_k, align 4
-  %2 = load i32, i32* %__1_k, align 4
+  store i32 1, i32* @main.__1_k, align 4
+  %2 = load i32, i32* @main.__1_k, align 4
   %3 = sext i32 %2 to i64
   %4 = sub i64 %3, 1
   %5 = mul i64 1, %4
@@ -69,8 +69,8 @@ then:                                             ; preds = %.entry
 ifcont:                                           ; preds = %.entry
   %10 = getelementptr [3 x i32], [3 x i32]* @main.b, i32 0, i64 %6
   store i32 10, i32* %10, align 4
-  store i32 2, i32* %__1_k, align 4
-  %11 = load i32, i32* %__1_k, align 4
+  store i32 2, i32* @main.__1_k, align 4
+  %11 = load i32, i32* @main.__1_k, align 4
   %12 = sext i32 %11 to i64
   %13 = sub i64 %12, 1
   %14 = mul i64 1, %13
@@ -87,8 +87,8 @@ then1:                                            ; preds = %ifcont
 ifcont2:                                          ; preds = %ifcont
   %19 = getelementptr [3 x i32], [3 x i32]* @main.b, i32 0, i64 %15
   store i32 20, i32* %19, align 4
-  store i32 3, i32* %__1_k, align 4
-  %20 = load i32, i32* %__1_k, align 4
+  store i32 3, i32* @main.__1_k, align 4
+  %20 = load i32, i32* @main.__1_k, align 4
   %21 = sext i32 %20 to i64
   %22 = sub i64 %21, 1
   %23 = mul i64 1, %22

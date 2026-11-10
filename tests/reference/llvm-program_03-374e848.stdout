@@ -6,6 +6,9 @@ target datalayout = "..."
 %string_descriptor = type { i8*, i64 }
 
 @closuretest.__lcompilers_current_frame = internal global %__lcompilers_frame_closuretest.7* null
+@closuretest.__lcompilers_frame = internal global %__lcompilers_frame_closuretest.7 zeroinitializer
+@closuretest.__lcompilers_frame.__struct_init = internal global i1 false
+@closuretest.z = internal global i32 0
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [3 x i8] c"I4\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -18,15 +21,20 @@ define i32 @main(i32 %0, i8** %1) {
   %call_arg_value = alloca i32, align 4
   %4 = alloca i64, align 8
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %__lcompilers_frame = alloca %__lcompilers_frame_closuretest.7, align 8
-  %z = alloca i32, align 4
-  %5 = getelementptr %__lcompilers_frame_closuretest.7, %__lcompilers_frame_closuretest.7* %__lcompilers_frame, i32 0, i32 0
-  store i32* %z, i32** %5, align 8
-  store i32 1, i32* %z, align 4
+  %5 = load i1, i1* @closuretest.__lcompilers_frame.__struct_init, align 1
+  br i1 %5, label %struct_init_done, label %struct_init
+
+struct_init:                                      ; preds = %.entry
+  store i1 true, i1* @closuretest.__lcompilers_frame.__struct_init, align 1
+  br label %struct_init_done
+
+struct_init_done:                                 ; preds = %struct_init, %.entry
+  store i32* @closuretest.z, i32** getelementptr inbounds (%__lcompilers_frame_closuretest.7, %__lcompilers_frame_closuretest.7* @closuretest.__lcompilers_frame, i32 0, i32 0), align 8
+  store i32 1, i32* @closuretest.z, align 4
   br i1 true, label %do_loop.body, label %do_loop.end
 
-do_loop.body:                                     ; preds = %do_loop.head, %.entry
-  store %__lcompilers_frame_closuretest.7* %__lcompilers_frame, %__lcompilers_frame_closuretest.7** @closuretest.__lcompilers_current_frame, align 8
+do_loop.body:                                     ; preds = %do_loop.head, %struct_init_done
+  store %__lcompilers_frame_closuretest.7* @closuretest.__lcompilers_frame, %__lcompilers_frame_closuretest.7** @closuretest.__lcompilers_current_frame, align 8
   store i32 1, i32* %call_arg_value, align 4
   %6 = call i32 @closuretest.apply(i32 (i32*)* @closuretest.add_z__lcompilers_value, i32* %call_arg_value)
   store i32 %6, i32* %3, align 4
@@ -53,13 +61,13 @@ free_done:                                        ; preds = %free_nonnull, %do_l
   br label %do_loop.head
 
 do_loop.head:                                     ; preds = %free_done
-  %17 = load i32, i32* %z, align 4
+  %17 = load i32, i32* @closuretest.z, align 4
   %18 = add nsw i32 %17, 1
-  store i32 %18, i32* %z, align 4
+  store i32 %18, i32* @closuretest.z, align 4
   %19 = icmp eq i32 %17, 10
   br i1 %19, label %do_loop.end, label %do_loop.body
 
-do_loop.end:                                      ; preds = %do_loop.head, %.entry
+do_loop.end:                                      ; preds = %do_loop.head, %struct_init_done
   br label %return
 
 return:                                           ; preds = %do_loop.end

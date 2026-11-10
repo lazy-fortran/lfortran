@@ -5,6 +5,12 @@ target datalayout = "..."
 %string_descriptor = type { i8*, i64 }
 
 @parameter_25.__libasr_array_constant_ = private unnamed_addr constant [4 x float] [float 1.000000e+00, float 2.000000e+00, float 3.000000e+00, float 4.000000e+00]
+@parameter_25.__libasr_index_0_ = internal global i32 0
+@parameter_25.__libasr_index_0_1 = internal global i32 0
+@parameter_25.__libasr_index_0_2 = internal global i32 0
+@parameter_25.__libasr_index_0_3 = internal global i32 0
+@parameter_25.a = internal global [8 x float] zeroinitializer
+@parameter_25.i = internal global i32 0
 @parameter_25.p = private unnamed_addr constant [4 x i32] [i32 1, i32 2, i32 3, i32 4]
 @0 = private unnamed_addr constant [2 x i8] c"a\00", align 1
 @1 = private unnamed_addr constant [44 x i8] c"tests/../integration_tests/parameter_25.f90\00", align 1
@@ -67,25 +73,19 @@ FINALIZE_SYMTABLE__lcompilers_real_i321:          ; preds = %return
 define i32 @main(i32 %0, i8** %1) {
 .entry:
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %__libasr_index_0_ = alloca i32, align 4
-  %__libasr_index_0_1 = alloca i32, align 4
-  %__libasr_index_0_2 = alloca i32, align 4
-  %__libasr_index_0_3 = alloca i32, align 4
-  %a = alloca [8 x float], align 16
-  %i = alloca i32, align 4
-  store i32 1, i32* %__libasr_index_0_1, align 4
-  store i32 1, i32* %__libasr_index_0_, align 4
+  store i32 1, i32* @parameter_25.__libasr_index_0_1, align 4
+  store i32 1, i32* @parameter_25.__libasr_index_0_, align 4
   br i1 true, label %do_loop.body, label %do_loop.end
 
 do_loop.body:                                     ; preds = %do_loop.head, %.entry
-  %2 = load i32, i32* %__libasr_index_0_, align 4
+  %2 = load i32, i32* @parameter_25.__libasr_index_0_, align 4
   %3 = sext i32 %2 to i64
   %4 = sub i64 %3, 1
   %5 = mul i64 1, %4
   %6 = add i64 0, %5
   %7 = add i64 %6, 0
-  %8 = getelementptr [8 x float], [8 x float]* %a, i32 0, i64 %7
-  %9 = load i32, i32* %__libasr_index_0_1, align 4
+  %8 = getelementptr [8 x float], [8 x float]* @parameter_25.a, i32 0, i64 %7
+  %9 = load i32, i32* @parameter_25.__libasr_index_0_1, align 4
   %10 = sext i32 %9 to i64
   %11 = sub i64 %10, 1
   %12 = mul i64 1, %11
@@ -93,32 +93,32 @@ do_loop.body:                                     ; preds = %do_loop.head, %.ent
   %14 = getelementptr [4 x float], [4 x float]* @parameter_25.__libasr_array_constant_, i32 0, i64 %13
   %15 = load float, float* %14, align 4
   store float %15, float* %8, align 4
-  %16 = load i32, i32* %__libasr_index_0_1, align 4
+  %16 = load i32, i32* @parameter_25.__libasr_index_0_1, align 4
   %17 = add i32 %16, 1
-  store i32 %17, i32* %__libasr_index_0_1, align 4
+  store i32 %17, i32* @parameter_25.__libasr_index_0_1, align 4
   br label %do_loop.head
 
 do_loop.head:                                     ; preds = %do_loop.body
-  %18 = load i32, i32* %__libasr_index_0_, align 4
+  %18 = load i32, i32* @parameter_25.__libasr_index_0_, align 4
   %19 = add nsw i32 %18, 1
-  store i32 %19, i32* %__libasr_index_0_, align 4
+  store i32 %19, i32* @parameter_25.__libasr_index_0_, align 4
   %20 = icmp eq i32 %18, 4
   br i1 %20, label %do_loop.end, label %do_loop.body
 
 do_loop.end:                                      ; preds = %do_loop.head, %.entry
-  store i32 1, i32* %__libasr_index_0_3, align 4
-  store i32 1, i32* %__libasr_index_0_2, align 4
+  store i32 1, i32* @parameter_25.__libasr_index_0_3, align 4
+  store i32 1, i32* @parameter_25.__libasr_index_0_2, align 4
   br i1 true, label %do_loop.body1, label %do_loop.end3
 
 do_loop.body1:                                    ; preds = %do_loop.head2, %do_loop.end
-  %21 = load i32, i32* %__libasr_index_0_2, align 4
+  %21 = load i32, i32* @parameter_25.__libasr_index_0_2, align 4
   %22 = sext i32 %21 to i64
   %23 = sub i64 %22, 1
   %24 = mul i64 1, %23
   %25 = add i64 0, %24
   %26 = add i64 %25, 4
-  %27 = getelementptr [8 x float], [8 x float]* %a, i32 0, i64 %26
-  %28 = load i32, i32* %__libasr_index_0_3, align 4
+  %27 = getelementptr [8 x float], [8 x float]* @parameter_25.a, i32 0, i64 %26
+  %28 = load i32, i32* @parameter_25.__libasr_index_0_3, align 4
   %29 = sext i32 %28 to i64
   %30 = sub i64 %29, 1
   %31 = mul i64 1, %30
@@ -126,24 +126,24 @@ do_loop.body1:                                    ; preds = %do_loop.head2, %do_
   %33 = getelementptr [4 x float], [4 x float]* @parameter_25.__libasr_array_constant_, i32 0, i64 %32
   %34 = load float, float* %33, align 4
   store float %34, float* %27, align 4
-  %35 = load i32, i32* %__libasr_index_0_3, align 4
+  %35 = load i32, i32* @parameter_25.__libasr_index_0_3, align 4
   %36 = add i32 %35, 1
-  store i32 %36, i32* %__libasr_index_0_3, align 4
+  store i32 %36, i32* @parameter_25.__libasr_index_0_3, align 4
   br label %do_loop.head2
 
 do_loop.head2:                                    ; preds = %do_loop.body1
-  %37 = load i32, i32* %__libasr_index_0_2, align 4
+  %37 = load i32, i32* @parameter_25.__libasr_index_0_2, align 4
   %38 = add nsw i32 %37, 1
-  store i32 %38, i32* %__libasr_index_0_2, align 4
+  store i32 %38, i32* @parameter_25.__libasr_index_0_2, align 4
   %39 = icmp eq i32 %37, 4
   br i1 %39, label %do_loop.end3, label %do_loop.body1
 
 do_loop.end3:                                     ; preds = %do_loop.head2, %do_loop.end
-  store i32 1, i32* %i, align 4
+  store i32 1, i32* @parameter_25.i, align 4
   br i1 true, label %do_loop.body4, label %do_loop.end18
 
 do_loop.body4:                                    ; preds = %do_loop.head17, %do_loop.end3
-  %40 = load i32, i32* %i, align 4
+  %40 = load i32, i32* @parameter_25.i, align 4
   %41 = sext i32 %40 to i64
   %42 = sub i64 %41, 1
   %43 = mul i64 1, %42
@@ -166,9 +166,9 @@ then5:                                            ; preds = %ifcont
   unreachable
 
 ifcont6:                                          ; preds = %ifcont
-  %49 = getelementptr [8 x float], [8 x float]* %a, i32 0, i64 %48
+  %49 = getelementptr [8 x float], [8 x float]* @parameter_25.a, i32 0, i64 %48
   %50 = load float, float* %49, align 4
-  %51 = load i32, i32* %i, align 4
+  %51 = load i32, i32* @parameter_25.i, align 4
   %52 = sext i32 %51 to i64
   %53 = sub i64 %52, 1
   %54 = mul i64 1, %53
@@ -186,7 +186,7 @@ ifcont8:                                          ; preds = %ifcont6
   %59 = getelementptr [4 x i32], [4 x i32]* @parameter_25.p, i32 0, i64 %55
   %60 = call float @_lcompilers_real_i32(i32* %59)
   %61 = fcmp une float %50, %60
-  %62 = load i32, i32* %i, align 4
+  %62 = load i32, i32* @parameter_25.i, align 4
   %63 = sext i32 %62 to i64
   %64 = sub i64 %63, 1
   %65 = mul i64 1, %64
@@ -209,9 +209,9 @@ then11:                                           ; preds = %ifcont10
   unreachable
 
 ifcont12:                                         ; preds = %ifcont10
-  %71 = getelementptr [8 x float], [8 x float]* %a, i32 0, i64 %70
+  %71 = getelementptr [8 x float], [8 x float]* @parameter_25.a, i32 0, i64 %70
   %72 = load float, float* %71, align 4
-  %73 = load i32, i32* %i, align 4
+  %73 = load i32, i32* @parameter_25.i, align 4
   %74 = sext i32 %73 to i64
   %75 = sub i64 %74, 1
   %76 = mul i64 1, %75
@@ -245,9 +245,9 @@ ifcont16:                                         ; preds = %else, %then15
   br label %do_loop.head17
 
 do_loop.head17:                                   ; preds = %ifcont16
-  %85 = load i32, i32* %i, align 4
+  %85 = load i32, i32* @parameter_25.i, align 4
   %86 = add nsw i32 %85, 1
-  store i32 %86, i32* %i, align 4
+  store i32 %86, i32* @parameter_25.i, align 4
   %87 = icmp eq i32 %85, 4
   br i1 %87, label %do_loop.end18, label %do_loop.body4
 

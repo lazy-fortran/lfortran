@@ -2,10 +2,14 @@
 source_filename = "LFortran"
 target datalayout = "..."
 
-%string_descriptor = type { i8*, i64 }
 %complex_8 = type <{ double, double }>
 %complex_4 = type <{ float, float }>
+%string_descriptor = type { i8*, i64 }
 
+@bin_op_complex_dp.u = internal global %complex_8 zeroinitializer
+@bin_op_complex_dp.v = internal global %complex_8 zeroinitializer
+@bin_op_complex_dp.x = internal global %complex_4 zeroinitializer
+@bin_op_complex_dp.zero = internal global %complex_4 zeroinitializer
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [32 x i8] c"{R4,R4},{R8,R8},{R4,R4},{R8,R8}\00", align 1
 @1 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
@@ -16,15 +20,11 @@ define i32 @main(i32 %0, i8** %1) {
   %2 = call i8* @_lfortran_get_default_allocator()
   %3 = alloca i64, align 8
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %u = alloca %complex_8, align 8
-  %v = alloca %complex_8, align 8
-  %x = alloca %complex_4, align 8
-  %zero = alloca %complex_4, align 8
-  store %complex_4 <{ float 0x3FC24924A0000000, float 0.000000e+00 }>, %complex_4* %zero, align 1
-  store %complex_8 <{ double 0x3FC24924A0000000, double 0.000000e+00 }>, %complex_8* %u, align 1
-  store %complex_8 <{ double 0x3FC2492492492492, double 0.000000e+00 }>, %complex_8* %v, align 1
-  store %complex_4 <{ float 0x3FC24924A0000000, float 0.000000e+00 }>, %complex_4* %x, align 1
-  %4 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, i32, i32, i32, i8**, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([32 x i8], [32 x i8]* @serialization_info, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i8** null, %complex_4* %zero, %complex_8* %v, %complex_4* %x, %complex_8* %u)
+  store %complex_4 <{ float 0x3FC24924A0000000, float 0.000000e+00 }>, %complex_4* @bin_op_complex_dp.zero, align 1
+  store %complex_8 <{ double 0x3FC24924A0000000, double 0.000000e+00 }>, %complex_8* @bin_op_complex_dp.u, align 1
+  store %complex_8 <{ double 0x3FC2492492492492, double 0.000000e+00 }>, %complex_8* @bin_op_complex_dp.v, align 1
+  store %complex_4 <{ float 0x3FC24924A0000000, float 0.000000e+00 }>, %complex_4* @bin_op_complex_dp.x, align 1
+  %4 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, i32, i32, i32, i8**, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([32 x i8], [32 x i8]* @serialization_info, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i8** null, %complex_4* @bin_op_complex_dp.zero, %complex_8* @bin_op_complex_dp.v, %complex_4* @bin_op_complex_dp.x, %complex_8* @bin_op_complex_dp.u)
   %5 = load i64, i64* %3, align 8
   %6 = getelementptr %string_descriptor, %string_descriptor* %stringFormat_desc, i32 0, i32 0
   store i8* %4, i8** %6, align 8

@@ -4,6 +4,10 @@ target datalayout = "..."
 
 %complex_4 = type <{ float, float }>
 
+@automatic_allocation_02.c = internal global %complex_4* null
+@automatic_allocation_02.i = internal global i32* null
+@automatic_allocation_02.l = internal global i32* null
+@automatic_allocation_02.r = internal global float* null
 @0 = private unnamed_addr constant [2 x i8] c"i\00", align 1
 @1 = private unnamed_addr constant [55 x i8] c"tests/../integration_tests/automatic_allocation_02.f90\00", align 1
 @2 = private unnamed_addr constant [53 x i8] c"Cannot allocate '%s' because it is already allocated\00", align 1
@@ -51,20 +55,12 @@ define i32 @main(i32 %0, i8** %1) {
 .entry:
   %2 = call i8* @_lfortran_get_default_allocator()
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %c = alloca %complex_4*, align 8
-  store %complex_4* null, %complex_4** %c, align 8
-  %i = alloca i32*, align 8
-  store i32* null, i32** %i, align 8
-  %l = alloca i32*, align 8
-  store i32* null, i32** %l, align 8
-  %r = alloca float*, align 8
-  store float* null, float** %r, align 8
-  %3 = load i32*, i32** %i, align 8
+  %3 = load i32*, i32** @automatic_allocation_02.i, align 8
   %4 = icmp eq i32* %3, null
   br i1 %4, label %then, label %else
 
 then:                                             ; preds = %.entry
-  %5 = load i32*, i32** %i, align 8
+  %5 = load i32*, i32** @automatic_allocation_02.i, align 8
   %6 = ptrtoint i32* %5 to i64
   %7 = icmp ne i64 %6, 0
   br i1 %7, label %then1, label %ifcont
@@ -78,21 +74,21 @@ ifcont:                                           ; preds = %then
   %9 = call i8* @_lfortran_malloc_alloc(i8* %8, i64 4)
   call void @llvm.memset.p0i8.i32(i8* %9, i8 0, i32 4, i1 false)
   %10 = bitcast i8* %9 to i32*
-  store i32* %10, i32** %i, align 8
+  store i32* %10, i32** @automatic_allocation_02.i, align 8
   br label %ifcont2
 
 else:                                             ; preds = %.entry
   br label %ifcont2
 
 ifcont2:                                          ; preds = %else, %ifcont
-  %11 = load i32*, i32** %i, align 8
+  %11 = load i32*, i32** @automatic_allocation_02.i, align 8
   store i32 10, i32* %11, align 1
-  %12 = load float*, float** %r, align 8
+  %12 = load float*, float** @automatic_allocation_02.r, align 8
   %13 = icmp eq float* %12, null
   br i1 %13, label %then3, label %else6
 
 then3:                                            ; preds = %ifcont2
-  %14 = load float*, float** %r, align 8
+  %14 = load float*, float** @automatic_allocation_02.r, align 8
   %15 = ptrtoint float* %14 to i64
   %16 = icmp ne i64 %15, 0
   br i1 %16, label %then4, label %ifcont5
@@ -106,21 +102,21 @@ ifcont5:                                          ; preds = %then3
   %18 = call i8* @_lfortran_malloc_alloc(i8* %17, i64 4)
   call void @llvm.memset.p0i8.i32(i8* %18, i8 0, i32 4, i1 false)
   %19 = bitcast i8* %18 to float*
-  store float* %19, float** %r, align 8
+  store float* %19, float** @automatic_allocation_02.r, align 8
   br label %ifcont7
 
 else6:                                            ; preds = %ifcont2
   br label %ifcont7
 
 ifcont7:                                          ; preds = %else6, %ifcont5
-  %20 = load float*, float** %r, align 8
+  %20 = load float*, float** @automatic_allocation_02.r, align 8
   store float 0x40119999A0000000, float* %20, align 1
-  %21 = load %complex_4*, %complex_4** %c, align 8
+  %21 = load %complex_4*, %complex_4** @automatic_allocation_02.c, align 8
   %22 = icmp eq %complex_4* %21, null
   br i1 %22, label %then8, label %else11
 
 then8:                                            ; preds = %ifcont7
-  %23 = load %complex_4*, %complex_4** %c, align 8
+  %23 = load %complex_4*, %complex_4** @automatic_allocation_02.c, align 8
   %24 = ptrtoint %complex_4* %23 to i64
   %25 = icmp ne i64 %24, 0
   br i1 %25, label %then9, label %ifcont10
@@ -134,21 +130,21 @@ ifcont10:                                         ; preds = %then8
   %27 = call i8* @_lfortran_malloc_alloc(i8* %26, i64 8)
   call void @llvm.memset.p0i8.i32(i8* %27, i8 0, i32 8, i1 false)
   %28 = bitcast i8* %27 to %complex_4*
-  store %complex_4* %28, %complex_4** %c, align 8
+  store %complex_4* %28, %complex_4** @automatic_allocation_02.c, align 8
   br label %ifcont12
 
 else11:                                           ; preds = %ifcont7
   br label %ifcont12
 
 ifcont12:                                         ; preds = %else11, %ifcont10
-  %29 = load %complex_4*, %complex_4** %c, align 8
+  %29 = load %complex_4*, %complex_4** @automatic_allocation_02.c, align 8
   store %complex_4 <{ float 1.000000e+00, float 2.000000e+00 }>, %complex_4* %29, align 1
-  %30 = load i32*, i32** %l, align 8
+  %30 = load i32*, i32** @automatic_allocation_02.l, align 8
   %31 = icmp eq i32* %30, null
   br i1 %31, label %then13, label %else16
 
 then13:                                           ; preds = %ifcont12
-  %32 = load i32*, i32** %l, align 8
+  %32 = load i32*, i32** @automatic_allocation_02.l, align 8
   %33 = ptrtoint i32* %32 to i64
   %34 = icmp ne i64 %33, 0
   br i1 %34, label %then14, label %ifcont15
@@ -162,16 +158,16 @@ ifcont15:                                         ; preds = %then13
   %36 = call i8* @_lfortran_malloc_alloc(i8* %35, i64 4)
   call void @llvm.memset.p0i8.i32(i8* %36, i8 0, i32 4, i1 false)
   %37 = bitcast i8* %36 to i32*
-  store i32* %37, i32** %l, align 8
+  store i32* %37, i32** @automatic_allocation_02.l, align 8
   br label %ifcont17
 
 else16:                                           ; preds = %ifcont12
   br label %ifcont17
 
 ifcont17:                                         ; preds = %else16, %ifcont15
-  %38 = load i32*, i32** %l, align 8
+  %38 = load i32*, i32** @automatic_allocation_02.l, align 8
   store i32 1, i32* %38, align 1
-  %39 = load i32*, i32** %i, align 8
+  %39 = load i32*, i32** @automatic_allocation_02.i, align 8
   %40 = ptrtoint i32* %39 to i64
   %41 = icmp eq i64 %40, 0
   br i1 %41, label %then18, label %ifcont19
@@ -181,7 +177,7 @@ then18:                                           ; preds = %ifcont17
   unreachable
 
 ifcont19:                                         ; preds = %ifcont17
-  %42 = load i32*, i32** %i, align 8
+  %42 = load i32*, i32** @automatic_allocation_02.i, align 8
   %43 = load i32, i32* %42, align 1
   %44 = icmp ne i32 %43, 10
   br i1 %44, label %then20, label %else21
@@ -196,7 +192,7 @@ else21:                                           ; preds = %ifcont19
   br label %ifcont22
 
 ifcont22:                                         ; preds = %else21, %then20
-  %45 = load float*, float** %r, align 8
+  %45 = load float*, float** @automatic_allocation_02.r, align 8
   %46 = ptrtoint float* %45 to i64
   %47 = icmp eq i64 %46, 0
   br i1 %47, label %then23, label %ifcont24
@@ -206,7 +202,7 @@ then23:                                           ; preds = %ifcont22
   unreachable
 
 ifcont24:                                         ; preds = %ifcont22
-  %48 = load float*, float** %r, align 8
+  %48 = load float*, float** @automatic_allocation_02.r, align 8
   %49 = load float, float* %48, align 1
   %50 = fcmp une float %49, 0x40119999A0000000
   br i1 %50, label %then25, label %else26
@@ -221,7 +217,7 @@ else26:                                           ; preds = %ifcont24
   br label %ifcont27
 
 ifcont27:                                         ; preds = %else26, %then25
-  %51 = load %complex_4*, %complex_4** %c, align 8
+  %51 = load %complex_4*, %complex_4** @automatic_allocation_02.c, align 8
   %52 = ptrtoint %complex_4* %51 to i64
   %53 = icmp eq i64 %52, 0
   br i1 %53, label %then28, label %ifcont29
@@ -231,7 +227,7 @@ then28:                                           ; preds = %ifcont27
   unreachable
 
 ifcont29:                                         ; preds = %ifcont27
-  %54 = load %complex_4*, %complex_4** %c, align 8
+  %54 = load %complex_4*, %complex_4** @automatic_allocation_02.c, align 8
   %55 = load %complex_4, %complex_4* %54, align 1
   %56 = extractvalue %complex_4 %55, 0
   %57 = extractvalue %complex_4 %55, 1
@@ -250,7 +246,7 @@ else31:                                           ; preds = %ifcont29
   br label %ifcont32
 
 ifcont32:                                         ; preds = %else31, %then30
-  %61 = load i32*, i32** %l, align 8
+  %61 = load i32*, i32** @automatic_allocation_02.l, align 8
   %62 = ptrtoint i32* %61 to i64
   %63 = icmp eq i64 %62, 0
   br i1 %63, label %then33, label %ifcont34
@@ -260,7 +256,7 @@ then33:                                           ; preds = %ifcont32
   unreachable
 
 ifcont34:                                         ; preds = %ifcont32
-  %64 = load i32*, i32** %l, align 8
+  %64 = load i32*, i32** @automatic_allocation_02.l, align 8
   %65 = load i32, i32* %64, align 1
   %66 = xor i32 %65, 1
   %67 = icmp ne i32 %66, 0
@@ -276,7 +272,7 @@ else36:                                           ; preds = %ifcont34
   br label %ifcont37
 
 ifcont37:                                         ; preds = %else36, %then35
-  %68 = load i32*, i32** %i, align 8
+  %68 = load i32*, i32** @automatic_allocation_02.i, align 8
   %69 = ptrtoint i32* %68 to i64
   %70 = icmp ne i64 %69, 0
   br i1 %70, label %then38, label %else39
@@ -287,14 +283,14 @@ then38:                                           ; preds = %ifcont37
   store i8* %72, i8** %71, align 8
   %73 = load i8*, i8** %71, align 8
   call void @_lfortran_free_alloc(i8* %2, i8* %73)
-  store i32* null, i32** %i, align 8
+  store i32* null, i32** @automatic_allocation_02.i, align 8
   br label %ifcont40
 
 else39:                                           ; preds = %ifcont37
   br label %ifcont40
 
 ifcont40:                                         ; preds = %else39, %then38
-  %74 = load float*, float** %r, align 8
+  %74 = load float*, float** @automatic_allocation_02.r, align 8
   %75 = ptrtoint float* %74 to i64
   %76 = icmp ne i64 %75, 0
   br i1 %76, label %then41, label %else42
@@ -305,14 +301,14 @@ then41:                                           ; preds = %ifcont40
   store i8* %78, i8** %77, align 8
   %79 = load i8*, i8** %77, align 8
   call void @_lfortran_free_alloc(i8* %2, i8* %79)
-  store float* null, float** %r, align 8
+  store float* null, float** @automatic_allocation_02.r, align 8
   br label %ifcont43
 
 else42:                                           ; preds = %ifcont40
   br label %ifcont43
 
 ifcont43:                                         ; preds = %else42, %then41
-  %80 = load %complex_4*, %complex_4** %c, align 8
+  %80 = load %complex_4*, %complex_4** @automatic_allocation_02.c, align 8
   %81 = ptrtoint %complex_4* %80 to i64
   %82 = icmp ne i64 %81, 0
   br i1 %82, label %then44, label %else45
@@ -323,14 +319,14 @@ then44:                                           ; preds = %ifcont43
   store i8* %84, i8** %83, align 8
   %85 = load i8*, i8** %83, align 8
   call void @_lfortran_free_alloc(i8* %2, i8* %85)
-  store %complex_4* null, %complex_4** %c, align 8
+  store %complex_4* null, %complex_4** @automatic_allocation_02.c, align 8
   br label %ifcont46
 
 else45:                                           ; preds = %ifcont43
   br label %ifcont46
 
 ifcont46:                                         ; preds = %else45, %then44
-  %86 = load i32*, i32** %l, align 8
+  %86 = load i32*, i32** @automatic_allocation_02.l, align 8
   %87 = ptrtoint i32* %86 to i64
   %88 = icmp ne i64 %87, 0
   br i1 %88, label %then47, label %else48
@@ -341,7 +337,7 @@ then47:                                           ; preds = %ifcont46
   store i8* %90, i8** %89, align 8
   %91 = load i8*, i8** %89, align 8
   call void @_lfortran_free_alloc(i8* %2, i8* %91)
-  store i32* null, i32** %l, align 8
+  store i32* null, i32** @automatic_allocation_02.l, align 8
   br label %ifcont49
 
 else48:                                           ; preds = %ifcont46
@@ -354,30 +350,6 @@ return:                                           ; preds = %ifcont49
   br label %FINALIZE_SYMTABLE_automatic_allocation_02
 
 FINALIZE_SYMTABLE_automatic_allocation_02:        ; preds = %return
-  br label %Finalize_Variable_c
-
-Finalize_Variable_c:                              ; preds = %FINALIZE_SYMTABLE_automatic_allocation_02
-  %92 = load %complex_4*, %complex_4** %c, align 8
-  %93 = bitcast %complex_4* %92 to i8*
-  call void @_lfortran_free_alloc(i8* %2, i8* %93)
-  br label %Finalize_Variable_i
-
-Finalize_Variable_i:                              ; preds = %Finalize_Variable_c
-  %94 = load i32*, i32** %i, align 8
-  %95 = bitcast i32* %94 to i8*
-  call void @_lfortran_free_alloc(i8* %2, i8* %95)
-  br label %Finalize_Variable_l
-
-Finalize_Variable_l:                              ; preds = %Finalize_Variable_i
-  %96 = load i32*, i32** %l, align 8
-  %97 = bitcast i32* %96 to i8*
-  call void @_lfortran_free_alloc(i8* %2, i8* %97)
-  br label %Finalize_Variable_r
-
-Finalize_Variable_r:                              ; preds = %Finalize_Variable_l
-  %98 = load float*, float** %r, align 8
-  %99 = bitcast float* %98 to i8*
-  call void @_lfortran_free_alloc(i8* %2, i8* %99)
   call void @_lfortran_internal_alloc_finalize()
   ret i32 0
 }

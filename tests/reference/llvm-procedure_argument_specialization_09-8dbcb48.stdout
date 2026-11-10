@@ -21,6 +21,7 @@ target datalayout = "..."
 @7 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @8 = private unnamed_addr constant [10 x i8] c"%s %.*s%s\00", align 1
 @__module_procedure_argument_specialization_09_host_host.__lcompilers_frame_slots.__struct_init = internal global i1 false
+@procedure_argument_specialization_09.res = internal global double 0.000000e+00
 @9 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @10 = private unnamed_addr constant [5 x i8] c"%s%s\00", align 1
 @11 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
@@ -658,13 +659,12 @@ define i32 @main(i32 %0, i8** %1) {
   %call_arg_value1 = alloca double, align 8
   %call_arg_value = alloca double, align 8
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %res = alloca double, align 8
   store double 1.000000e+00, double* %call_arg_value, align 8
   store double 2.000000e+00, double* %call_arg_value1, align 8
   store double 5.000000e-01, double* %call_arg_value2, align 8
   store i32 1000, i32* %call_arg_value3, align 4
-  call void @__module_procedure_argument_specialization_09_host_host(double* %call_arg_value, double* %call_arg_value1, double* %call_arg_value2, i32* %call_arg_value3, double* %res)
-  %4 = load double, double* %res, align 8
+  call void @__module_procedure_argument_specialization_09_host_host(double* %call_arg_value, double* %call_arg_value1, double* %call_arg_value2, i32* %call_arg_value3, double* @procedure_argument_specialization_09.res)
+  %4 = load double, double* @procedure_argument_specialization_09.res, align 8
   %5 = fsub double %4, 0x3FF5555555555555
   %6 = fsub double %5, 5.000000e-01
   %7 = call double @llvm.fabs.f64(double %6)
@@ -681,7 +681,7 @@ else:                                             ; preds = %.entry
   br label %ifcont
 
 ifcont:                                           ; preds = %else, %then
-  %9 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, i32, i32, i32, i8**, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @serialization_info, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i8** null, double* %res)
+  %9 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, i32, i32, i32, i8**, ...) @_lcompilers_string_format_fortran(i8* %2, i8* null, i64 0, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @serialization_info, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i8** null, double* @procedure_argument_specialization_09.res)
   %10 = load i64, i64* %3, align 8
   %11 = getelementptr %string_descriptor, %string_descriptor* %stringFormat_desc, i32 0, i32 0
   store i8* %9, i8** %11, align 8

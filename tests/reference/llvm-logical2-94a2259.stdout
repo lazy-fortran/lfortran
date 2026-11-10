@@ -4,6 +4,8 @@ target datalayout = "..."
 
 %string_descriptor = type { i8*, i64 }
 
+@logical2.a = internal global i32 0
+@logical2.b = internal global i32 0
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @string_const_data = private constant [26 x i8] c"Line 1 - Condition is true"
 @string_const = private global %string_descriptor { i8* getelementptr inbounds ([26 x i8], [26 x i8]* @string_const_data, i32 0, i32 0), i64 26 }
@@ -16,12 +18,10 @@ target datalayout = "..."
 define i32 @main(i32 %0, i8** %1) {
 .entry:
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %a = alloca i32, align 4
-  %b = alloca i32, align 4
-  store i32 1, i32* %a, align 4
-  store i32 0, i32* %b, align 4
-  %2 = load i32, i32* %a, align 4
-  %3 = load i32, i32* %b, align 4
+  store i32 1, i32* @logical2.a, align 4
+  store i32 0, i32* @logical2.b, align 4
+  %2 = load i32, i32* @logical2.a, align 4
+  %3 = load i32, i32* @logical2.b, align 4
   %4 = and i32 %2, %3
   %5 = icmp ne i32 %4, 0
   br i1 %5, label %then, label %else

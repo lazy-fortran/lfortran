@@ -7,6 +7,9 @@ target datalayout = "..."
 %my_module.__lcompilers_frame_my_wrapper.10 = type { float ()** }
 
 @example.__lcompilers_current_frame = internal global %__lcompilers_frame_example.9* null
+@example.__lcompilers_frame = internal global %__lcompilers_frame_example.9 zeroinitializer
+@example.__lcompilers_frame.__struct_init = internal global i1 false
+@example.target_value = internal global float 0.000000e+00
 @0 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 @serialization_info = private unnamed_addr constant [16 x i8] c"S-DESC-K1-31,R4\00", align 1
 @string_const_data = private constant [31 x i8] c"Via wrapper (should equal .5): "
@@ -108,12 +111,17 @@ define i32 @main(i32 %0, i8** %1) {
   %5 = alloca float, align 4
   %6 = alloca i64, align 8
   call void @_lpython_call_initial_functions(i32 %0, i8** %1)
-  %__lcompilers_frame = alloca %__lcompilers_frame_example.9, align 8
-  %target_value = alloca float, align 4
-  %7 = getelementptr %__lcompilers_frame_example.9, %__lcompilers_frame_example.9* %__lcompilers_frame, i32 0, i32 0
-  store float* %target_value, float** %7, align 8
-  store float 5.000000e-01, float* %target_value, align 4
-  store %__lcompilers_frame_example.9* %__lcompilers_frame, %__lcompilers_frame_example.9** @example.__lcompilers_current_frame, align 8
+  %7 = load i1, i1* @example.__lcompilers_frame.__struct_init, align 1
+  br i1 %7, label %struct_init_done, label %struct_init
+
+struct_init:                                      ; preds = %.entry
+  store i1 true, i1* @example.__lcompilers_frame.__struct_init, align 1
+  br label %struct_init_done
+
+struct_init_done:                                 ; preds = %struct_init, %.entry
+  store float* @example.target_value, float** getelementptr inbounds (%__lcompilers_frame_example.9, %__lcompilers_frame_example.9* @example.__lcompilers_frame, i32 0, i32 0), align 8
+  store float 5.000000e-01, float* @example.target_value, align 4
+  store %__lcompilers_frame_example.9* @example.__lcompilers_frame, %__lcompilers_frame_example.9** @example.__lcompilers_current_frame, align 8
   %8 = call float @__module_my_module_my_wrapper(float ()* @example.my_fun__lcompilers_value)
   store float %8, float* %5, align 4
   %9 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, i32, i32, i32, i8**, ...) @_lcompilers_string_format_fortran(i8* %4, i8* null, i64 0, i8* getelementptr inbounds ([16 x i8], [16 x i8]* @serialization_info, i32 0, i32 0), i64* %6, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i8** null, %string_descriptor* @string_const, float* %5)
@@ -131,12 +139,12 @@ define i32 @main(i32 %0, i8** %1) {
   %18 = icmp eq i8* %9, null
   br i1 %18, label %free_done, label %free_nonnull
 
-free_nonnull:                                     ; preds = %.entry
+free_nonnull:                                     ; preds = %struct_init_done
   call void @_lfortran_free_alloc(i8* %4, i8* %9)
   br label %free_done
 
-free_done:                                        ; preds = %free_nonnull, %.entry
-  %19 = call float @example.my_fun(%__lcompilers_frame_example.9* %__lcompilers_frame)
+free_done:                                        ; preds = %free_nonnull, %struct_init_done
+  %19 = call float @example.my_fun(%__lcompilers_frame_example.9* @example.__lcompilers_frame)
   store float %19, float* %2, align 4
   %20 = call i8* (i8*, i8*, i64, i8*, i64*, i32, i32, i32, i32, i32, i32, i32, i32, i8**, ...) @_lcompilers_string_format_fortran(i8* %4, i8* null, i64 0, i8* getelementptr inbounds ([16 x i8], [16 x i8]* @serialization_info.1, i32 0, i32 0), i64* %3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i8** null, %string_descriptor* @string_const.3, float* %2)
   %21 = load i64, i64* %3, align 8
@@ -158,7 +166,7 @@ free_nonnull2:                                    ; preds = %free_done
   br label %free_done3
 
 free_done3:                                       ; preds = %free_nonnull2, %free_done
-  store %__lcompilers_frame_example.9* %__lcompilers_frame, %__lcompilers_frame_example.9** @example.__lcompilers_current_frame, align 8
+  store %__lcompilers_frame_example.9* @example.__lcompilers_frame, %__lcompilers_frame_example.9** @example.__lcompilers_current_frame, align 8
   %30 = call float @__module_my_module_my_wrapper(float ()* @example.my_fun__lcompilers_value)
   %31 = fsub float %30, 5.000000e-01
   store float %31, float* %call_arg_value, align 4
@@ -176,7 +184,7 @@ else:                                             ; preds = %free_done3
   br label %ifcont
 
 ifcont:                                           ; preds = %else, %then
-  %34 = call float @example.my_fun(%__lcompilers_frame_example.9* %__lcompilers_frame)
+  %34 = call float @example.my_fun(%__lcompilers_frame_example.9* @example.__lcompilers_frame)
   %35 = fsub float %34, 5.000000e-01
   store float %35, float* %call_arg_value, align 4
   %36 = call float @_lcompilers_abs_f32(float* %call_arg_value)
