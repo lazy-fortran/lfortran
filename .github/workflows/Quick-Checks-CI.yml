@@ -25,6 +25,12 @@ concurrency:
 
 env:
   MACOSX_DEPLOYMENT_TARGET: 26.0
+  # OpenMPI's UCX transport fails on the network devices of the hosted
+  # runners ("failed to create UCP worker"), which failed MPI tests that
+  # have nothing to do with the change; the shared-memory and TCP
+  # transports are enough for tests on one machine.
+  OMPI_MCA_pml: "^ucx"
+  OMPI_MCA_osc: "^ucx"
 
 jobs:
   Build:
@@ -33,19 +39,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # macOS runs LLVM 11 only. A full integration-test pass costs ~7x
-          # more on the 3-core macOS runners than on Linux, and macOS + a
-          # recent LLVM is covered on every merge by the Exhaustive checks
-          # "Test LLVM 22 (macos-latest)" job.
-          - os: macos-latest
-            llvm-version: "11"
-          - os: ubuntu-latest
-            llvm-version: "11"
-          - os: ubuntu-latest
-            llvm-version: "21"
-          - os: windows-2025
-            llvm-version: "11"
+        # macOS runs LLVM 11 only. A full integration-test pass costs ~7x
+        # more on the 3-core macOS runners than on Linux. The merge queue
+        # leaves macOS out: hosted macOS runners are often not assigned
+        # within the queue's time, which blocked every merge. macOS still
+        # runs on each push to main and on pull requests labelled full-ci.
+        include: ${{ fromJSON(github.event_name == 'merge_group' && '[{"os":"ubuntu-latest","llvm-version":"11"},{"os":"ubuntu-latest","llvm-version":"21"},{"os":"windows-2025","llvm-version":"11"}]' || '[{"os":"macos-latest","llvm-version":"11"},{"os":"ubuntu-latest","llvm-version":"11"},{"os":"ubuntu-latest","llvm-version":"21"},{"os":"windows-2025","llvm-version":"11"}]') }}
     steps:
       - uses: actions/checkout@v7
         with:
