@@ -115,6 +115,10 @@ public:
     // The precedence of the last expression, using the table
     // 10.1 in the Fortran 2018 standard:
     int last_expr_precedence;
+    // The statement label printed last, so that visit_DoLoop does not
+    // print a DO terminal label again on `end do` when the loop body
+    // already printed it
+    int64_t last_label = 0;
 
     // Syntax highlighting groups
     enum gr {
@@ -432,23 +436,31 @@ public:
 
     void visit_Program(const Program_t &x) {
         std::string r;
-        r += syn(gr::UnitHeader);
-        r.append("program");
-        r += syn();
-        r += " ";
-        r.append(x.m_name);
-        if(x.m_trivia){
-            r += print_trivia_inside(*x.m_trivia);
-        } else {
-            r.append("\n");
+        // A main program written without a PROGRAM statement has only an
+        // internal name and no start name location: print it without a
+        // PROGRAM statement and end it with a nameless END PROGRAM.
+        bool has_program_stmt = x.m_start_name != nullptr;
+        if (has_program_stmt) {
+            r += syn(gr::UnitHeader);
+            r.append("program");
+            r += syn();
+            r += " ";
+            r.append(x.m_name);
+            if(x.m_trivia){
+                r += print_trivia_inside(*x.m_trivia);
+            } else {
+                r.append("\n");
+            }
         }
 
         r += format_unit_body(x);
         r += syn(gr::UnitHeader);
         r.append("end program");
         r += syn();
-        r += " ";
-        r.append(x.m_name);
+        if (has_program_stmt) {
+            r += " ";
+            r.append(x.m_name);
+        }
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {
@@ -1475,9 +1487,6 @@ public:
             r += "/";
         } else if(x.m_name) {
             r.append(x.m_name);
-            if(x.m_sym == DoubleAsterisk) {
-                r += symbol2str(x.m_sym);
-            }
         }
         if (x.n_dim > 0) {
             r.append("(");
@@ -1497,9 +1506,17 @@ public:
             }
             r.append("]");
         }
+        if (x.m_sym == DoubleAsterisk) {
+            r += symbol2str(x.m_sym);
+        }
         if (x.m_length) {
+            // `name*len` or `name*(len)`; m_sym describes the initializer
             visit_expr(*x.m_length);
-            r += symbol2str(x.m_sym) + s;
+            if (is_a<Num_t>(*x.m_length)) {
+                r += "*" + s;
+            } else {
+                r += "*(" + s + ")";
+            }
         }
         if (x.m_initializer) {
             if (x.m_sym == SlashInit) {
@@ -1518,7 +1535,11 @@ public:
                 r += "/";
             } else {
                 visit_expr(*x.m_initializer);
-                r += symbol2str(x.m_sym) + s;
+                if (x.m_sym == DoubleAsterisk) {
+                    r += symbol2str(Equal) + s;
+                } else {
+                    r += symbol2str(x.m_sym) + s;
+                }
             }
         }
         if (x.m_spec) {
@@ -2216,6 +2237,21 @@ public:
         this->visit_expr(*x.m_test);
         r += s;
         r += ") ";
+        if (x.m_single) {
+            // Logical IF statement: the action statement on the same line
+            std::string if_indent = indent;
+            indent = "";
+            this->visit_decl_stmt(*x.m_body[0]);
+            indent = if_indent;
+            r += s;
+            if (x.m_trivia) {
+                // The comment after the action statement, before its newline
+                r.pop_back();
+                r += print_trivia_after(*x.m_trivia);
+            }
+            s = r;
+            return;
+        }
         r += syn(gr::Conditional);
         r += "then";
         r += syn();
@@ -2253,6 +2289,7 @@ public:
         r += syn(gr::Conditional);
         r += "end if";
         r += syn();
+        r += end_stmt_name(x);
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {
@@ -2326,6 +2363,7 @@ public:
         r += syn(gr::Repeat);
         r += "end where";
         r += syn();
+        r += end_stmt_name(x);
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {
@@ -2385,6 +2423,24 @@ public:
         if (x.m_quiet) {
             this->visit_expr(*x.m_quiet);
             r += ", quiet = " + s;
+        }
+        if(x.m_trivia){
+            r += print_trivia_after(*x.m_trivia);
+        } else {
+            r.append("\n");
+        }
+        s = r;
+    }
+
+    void visit_Pause(const Pause_t &x) {
+        std::string r = indent;
+        r += print_label(x);
+        r += syn(gr::Keyword);
+        r.append("pause");
+        r += syn();
+        if (x.m_code) {
+            this->visit_expr(*x.m_code);
+            r += " " + s;
         }
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
@@ -2598,6 +2654,7 @@ public:
             r.append("\n");
         }
         inc_indent();
+        last_label = 0;
         for (size_t i=0; i<x.n_body; i++) {
             this->visit_decl_stmt(*x.m_body[i]);
             r.append(s);
@@ -2605,9 +2662,14 @@ public:
         dec_indent();
         r += indent;
         r += syn(gr::Repeat);
-        if (x.m_do_label != 0) {
+        // The terminal label is printed only once: on the terminal action
+        // statement (`10 x = x + 1`) if there is one, otherwise on the
+        // `end do` of the innermost loop that shares it, as a branch to the
+        // label ends an iteration of that loop
+        if (x.m_do_label != 0 && last_label != x.m_do_label) {
             r += std::to_string(x.m_do_label);
             r += " ";
+            last_label = x.m_do_label;
         }
         r.append("end do");
         r += syn();
@@ -2889,6 +2951,7 @@ public:
         r += syn(gr::Repeat);
         r.append("end do");
         r += syn();
+        r += end_stmt_name(x);
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {
@@ -3157,6 +3220,7 @@ public:
         r += syn(gr::Repeat);
         r += "end do";
         r += syn();
+        r += end_stmt_name(x);
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {
@@ -3549,6 +3613,7 @@ public:
         if (x.m_label == 0) {
             return "";
         } else {
+            last_label = x.m_label;
             return std::to_string(x.m_label) + " ";
         }
     }
@@ -4419,6 +4484,7 @@ public:
         r += syn(gr::Conditional);
         r += "end select";
         r += syn();
+        r += end_stmt_name(x);
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {
@@ -4619,6 +4685,7 @@ public:
         r += syn(gr::Conditional);
         r += "end select";
         r += syn();
+        r += end_stmt_name(x);
         if(x.m_trivia){
             r += print_trivia_after(*x.m_trivia);
         } else {

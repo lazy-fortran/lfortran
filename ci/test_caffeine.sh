@@ -1,11 +1,31 @@
 #!/usr/bin/env bash
 echo "##[group] Setup"
-set -ex
+set -ex -o pipefail
 
 echo "CONDA_PREFIX=$CONDA_PREFIX"
+reference=false
 if [[ $(uname -s) == Linux ]] ; then
-  LINUX=1
+  case "${LFORTRAN_CI_SCOPE:-exhaustive}" in
+    quick)
+      reference=$(python3 ci/coarray_tests.py reference \
+        --base "${LFORTRAN_COARRAY_BASE:-}" --head "${LFORTRAN_COARRAY_HEAD:-}")
+      ;;
+    exhaustive)
+      reference=true
+      ;;
+    *)
+      echo "ERROR: unknown LFORTRAN_CI_SCOPE: $LFORTRAN_CI_SCOPE" >&2
+      exit 2
+      ;;
+  esac
 fi
+case "$reference" in
+  true|false) echo "Run GFortran/OpenCoarrays reference validation: $reference" ;;
+  *) echo "ERROR: invalid coarray reference selection: $reference" >&2; exit 2 ;;
+esac
+
+# Fail before dependency setup if registrations cannot be understood.
+tests=$(python3 ci/coarray_tests.py list)
 
 # Use freshly built LFortran
 
@@ -14,24 +34,38 @@ export PATH="$PWD/src/bin:$PATH"
 which lfortran
 lfortran --version
 
-micromamba install -c conda-forge fpm=0.12.0
+ensure_tool() {
+  local package="$1" status
+  shift
+  if "$@"; then
+    return 0
+  else
+    status=$?
+  fi
+  # Only a missing command warrants installation; do not mask broken tools.
+  if [[ "$status" != 127 ]]; then
+    return "$status"
+  fi
+  micromamba install -y -c conda-forge "$package"
+  "$@"
+}
 
-which fpm
-fpm --version
+ensure_tool fpm=0.12.0 fpm --version
 
-if [ $LINUX ] ; then
+if [[ "$reference" == true ]] ; then
 
 (set +x
  echo "##[endgroup]"
- echo "##[group] Install MPICH"
+ echo "##[group] Install OpenMPI"
 )
 
-# OpenCoarrays cannot use OpenMPI with recent GFortran. Keep its MPICH
-# reference toolchain separate from the main environment, which uses OpenMPI.
-micromamba create -y -p "$PWD/opencoarrays-mpi" -c conda-forge mpich gfortran_linux-64
-export PATH="$PWD/opencoarrays-mpi/bin:$PATH"
+# Probe the MPI wrapper itself, not its configured build-time compiler.
+# OpenCoarrays' CMake build selects the available GFortran separately.
+ensure_tool openmpi=5.0.6=hb85ec53_102 mpifort --showme:version
+export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe
+export OMPI_MCA_rmaps_base_oversubscribe=1
 
-(set +x
+(set +x 
  echo "##[endgroup]"
  echo "##[group] Install OpenCoarrays"
 )
@@ -40,8 +74,6 @@ git clone https://github.com/sourceryinstitute/OpenCoarrays.git
 cd OpenCoarrays
 
 cmake -B build \
-  -DCMAKE_C_COMPILER=mpicc \
-  -DCMAKE_Fortran_COMPILER=mpifort \
   -DCMAKE_INSTALL_PREFIX="$PWD/inst"
 
 cmake --build build -j2
@@ -57,9 +89,9 @@ caf --version
 which cafrun
 cafrun --version
 
-fi # LINUX
+fi # reference
 
-(set +x
+(set +x 
  echo "##[endgroup]"
  echo "##[group] Install Caffeine"
 )
@@ -69,21 +101,8 @@ fi # LINUX
 git clone -b main https://github.com/BerkeleyLab/caffeine.git
 cd caffeine
 
-# Release 0.8.0
-git checkout 9a4a818d9617bc88890a9fdc9fd6e66959c7fad0
-
-# Cherry-pick a recent fix to -DCAF_IMPORT_TEAM_CONSTANTS
-git config user.email "nobody@nowhere.com"
-git config user.name  "Nobody"
-git cherry-pick 736130c4af77b4ab33e4341e6dcd32ab4c8b7f4a
-
-# Cherry-pick recent fixes to assertion reporting for LFortran (Caffeine PR #353)
-git cherry-pick 4ccb611328908c9fdee05d0bab587baa4ac679db
-# Sadly git-merge lacks the ability to ignore irrelevant changes
-# on adjacenet lines, so this critical one-line commit doesn't apply cleanly:
-#git cherry-pick 34652e1e215ab08eabac2642b6db82c9beac944f
-# Apply it manually instead:
-sed -i.bak '\|assert\.git|s/3\.1\.0/3.1.2/' manifest/fpm.toml.template
+# Release 0.8.4
+git checkout 0f9ca691cbe6782838266a9bb5005ae187f253a2
 
 # Toolchain setup
 
@@ -97,23 +116,24 @@ echo "CXX=${CXX}"
 which clang
 clang --version
 
-# inject ISO_Fortran_binding.h into the C include path
-export CPPFLAGS="-I$(lfortran --print-c-include-dir)"
-
-# instruct Caffeine to import the iso_fortran_env constants from LFortran
-CPPFLAGS+=" -DCAF_IMPORT_CONSTANTS"
-
-# GASNet debug options
-
-export GASNET_CONFIGURE_ARGS="--enable-rpath --enable-debug"
-
 # Build caffeine
 
-./install.sh --yes --prefix=$PWD/inst --verbose
+./install.sh --yes --prefix=$PWD/inst --verbose --enable-rpath --enable-debug
 
 # Output Caffeine configuration information
 
 ./run-fpm.sh info
+
+(set +x
+ echo "##[endgroup]"
+ echo "##[group] Caffeine unit tests"
+)
+
+# Failures here can indicate regressions compiling Caffeine's ordinary Fortran,
+# independently of LFortran's coarray lowering.
+# The generated wrapper selects LFortran and GASNet; keep its four-image
+# unit-test setting local so integration tests retain their own image counts.
+CAF_IMAGES=4 ./run-fpm.sh test --verbose
 
 cd ..
 
@@ -121,7 +141,19 @@ cd ..
 
 export PATH="$PWD/caffeine/inst/bin:$PATH"
 
-(set +x
+(set +x 
+ echo "##[endgroup]"
+ echo "##[group] Caffeine smoke test"
+
+)
+
+# Ensure Caffeine we just built can pass its own end-to-end smoke test
+# Note this activates LFortran's coarray pass, so failures here can indicate an LFortran regression
+
+make -C caffeine/app prif
+
+
+(set +x 
  echo "##[endgroup]"
  echo "##[group] Test setup"
 )
@@ -131,37 +163,6 @@ export PATH="$PWD/caffeine/inst/bin:$PATH"
 CAF_IMAGES=${CAF_IMAGES:-2}
 
 echo "Using CAF_IMAGES=$CAF_IMAGES"
-
-# Find all coarray-enabled tests
-
-tests=$(python3 -c '
-import re
-filenames = []
-
-with open("integration_tests/CMakeLists.txt") as f:
-    for line in f:
-        line = line.strip()
-        if line.startswith("RUN(") and "coarray=true" in line:
-            fields = ["NAME", "NUM_IMAGES", "LABELS", "EXTRAFILES", "EXTRA_ARGS"]
-            # Regex pattern matching key, separator (space or =), and value up to the next key or closing bracket
-            fields_pattern = "|".join(fields)
-            pattern = rf"({fields_pattern})[ =]\s*(.*?)(?=\s+(?:{fields_pattern})[ =]|\))"
-            parsed_data = dict(re.findall(pattern, line))
-            name       = parsed_data.get("NAME")
-            num_images = parsed_data.get("NUM_IMAGES") or ""
-            extra_args = parsed_data.get("EXTRA_ARGS") or ""
-            extrafiles = parsed_data.get("EXTRAFILES") or ""
-            extrafiles = " ".join(f"integration_tests/{item}" for item in extrafiles.split())
-            if name:
-                filenames.append(f"integration_tests/{name}.f90;{num_images};{extra_args};{extrafiles}")
-
-print("\n".join(filenames))
-')
-
-if [ -z "$tests" ]; then
-echo "No coarray tests found"
-exit 1
-fi
 
 # OpenCoarrays (caf/cafrun) does not support character arguments to co_max/co_min,
 # so the gfortran cross-check is skipped for those tests. LFortran + Caffeine still
@@ -197,7 +198,7 @@ base=$(basename "$testfile" .f90)
 # Compile with LFortran + caffeine
 # ----------------------------------------
 
-lfortran $extrafiles $testfile \
+lfortran "$@" $extrafiles $testfile \
     $extra_args \
     -o "${base}_lf.out" \
     -L$PWD/caffeine/inst/lib \
@@ -214,13 +215,13 @@ gasnetrun_smp -n "$num_images" ./"${base}_lf.out"
 # Cross-check with gfortran/OpenCoarrays, unless OpenCoarrays lacks support
 # ----------------------------------------
 
-if [ $LINUX ] ; then
+if [[ "$reference" == true ]] ; then
   if [[ " $opencoarrays_unsupported " =~ " $base " ]] ; then
     skip_opencoarrays=true
   else
     skip_opencoarrays=false
   fi
-else # macOS
+else
   skip_opencoarrays=true
 fi
 
@@ -240,7 +241,7 @@ echo "PASS: $testfile"
 
 done 3<<< "$tests" # end of while loop over tests
 
-(set +x
+(set +x 
  echo "##[endgroup]"
 )
 
@@ -248,4 +249,6 @@ echo
 echo "All coarray runtime tests passed"
 
 rm -rf caffeine
-rm -rf OpenCoarrays opencoarrays-mpi
+if [[ "$reference" == true ]]; then
+    rm -rf OpenCoarrays
+fi

@@ -31,9 +31,11 @@
                     nil
                     false
                     false
+                    false
                     :NotMethod
                     nil
                     []
+                    nil
                   )
                   "helper" (Variable
                     7
@@ -56,9 +58,11 @@
                     nil
                     false
                     false
+                    false
                     :NotMethod
                     nil
                     []
+                    nil
                   )
                 }
               )
@@ -99,6 +103,8 @@
                     (SymbolRef 7 "arg")
                   )
                   nil
+                  false
+                  false
                   false
                   false
                 )
@@ -155,9 +161,11 @@
               nil
               false
               false
+              false
               :NotMethod
               nil
               []
+              nil
             )
           }
         )

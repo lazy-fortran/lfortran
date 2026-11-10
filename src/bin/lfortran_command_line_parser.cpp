@@ -1,4 +1,5 @@
 #include <libasr/exception.h>
+#include <libasr/pass/gpu_loop_utils.h>
 #include <libasr/string_utils.h>
 
 #include <algorithm>
@@ -120,10 +121,17 @@ namespace LCompilers::CommandLineInterface {
             "Indent contents of sub / fn / prog / mod");
         parser.fmt->add_flag("--no-color", parser.opts.arg_fmt_no_color,
             "Turn off color when writing to stdout");
+        // Accept compiler options (such as --fixed-form) after the subcommand
+        parser.fmt->fallthrough();
 
         parser.kernel = parser.app.add_subcommand("kernel", "Run in Jupyter kernel mode.");
         parser.kernel->add_option("-f", parser.opts.arg_kernel_f,
             "The kernel connection file")->required();
+        parser.kernel->add_flag("--managed", parser.opts.arg_kernel_managed,
+            "Stop the built-in kernel when its last client disconnects");
+        parser.kernel->add_option("--parent", parser.opts.arg_kernel_parent,
+            "Stop, removing the connection file, when this parent process exits "
+            "(the prompt that starts the kernel), or at once if it has exited");
 
         parser.mod = parser.app.add_subcommand("mod", "Fortran mod file utilities.");
         parser.mod->add_option("file", parser.opts.arg_mod_file,
@@ -138,6 +146,7 @@ namespace LCompilers::CommandLineInterface {
             "Fortran source file (*.f90)")->required();
         parser.pywrap->add_option("--array-order", parser.opts.arg_pywrap_array_order,
             "Select array order (c, f)")->capture_default_str();
+        parser.pywrap->fallthrough();
 
 #ifdef WITH_LSP
         parser.server = parser.languageServerInterface.prepare(parser.app);
@@ -242,6 +251,8 @@ namespace LCompilers::CommandLineInterface {
             "DEPRECATED: legacy alias for --separate-compilation");
         app.add_option("-o", compiler_options.arg_o, "Specify the file to place the compiler's output into");
         app.add_flag("-v", opts.arg_v, "Be more verbose");
+        app.add_option("--connect", opts.connect,
+            "Run the prompt in the Jupyter kernel of the connection FILE");
         app.add_flag("-E", opts.arg_E, "Preprocess only; do not compile, assemble or link");
         app.add_option("-l", opts.arg_l, "Link library option")->allow_extra_args(false);
         app.add_option("-L", opts.arg_L, "Library path option")->allow_extra_args(false);
@@ -348,10 +359,15 @@ namespace LCompilers::CommandLineInterface {
         app.add_flag("--print-c-include-dir", opts.print_c_include_dir, "Print the directory containing ISO_Fortran_binding.h")->group(group_backend_codegen_options);
         app.add_flag("--wasm-html", compiler_options.wasm_html, "Generate HTML file using emscripten for LLVM->WASM")->group(group_backend_codegen_options);
         app.add_option("--emcc-embed", compiler_options.emcc_embed, "Embed a given file/directory using emscripten for LLVM->WASM")->group(group_backend_codegen_options);
+        app.add_option("-s", opts.emscripten_settings, "Emscripten setting (SETTING or SETTING=VALUE); repeatable, requires an Emscripten LLVM target")->allow_extra_args(false)->group(group_backend_codegen_options);
         app.add_option("--gpu", compiler_options.gpu_backend, "Enable GPU offloading for do concurrent (metal, cuda, cuda_cpu)")->capture_default_str()->group(group_backend_codegen_options);
         app.add_option("--device-compiler", compiler_options.device_compiler, "Toolchain driver used to compile and link GPU device code")->capture_default_str()->group(group_backend_codegen_options);
+        app.add_option("--gpu-arch", compiler_options.gpu_arch, "GPU architecture to compile device code for with --gpu=cuda (e.g. sm_120); defaults to the GPUs of the compiling machine")->group(group_backend_codegen_options);
         app.add_flag("--gpu-offload-omp-loops", compiler_options.po.gpu_offload_omp_loops, "Offload an `!$omp parallel do` loop onto the GPU as well")->group(group_backend_codegen_options);
-        app.add_flag("--gpu-allow-cpu-fallback", compiler_options.po.gpu_allow_cpu_fallback, "Run a parallel loop that uses a construct the selected GPU does not support (real(8) on Metal, real(10) or real(16), input/output, or stop on Metal) on the CPU with a warning instead of failing compilation")->group(group_backend_codegen_options);
+        app.add_flag("--gpu-allow-cpu-fallback", compiler_options.po.gpu_allow_cpu_fallback, "Run a parallel loop that uses a construct the selected GPU does not support (real(8) on Metal, real(10) or real(16), or input/output) on the CPU with a warning instead of failing compilation")->group(group_backend_codegen_options);
+        app.add_option("--gpu-loop-transforms", compiler_options.po.gpu_loop_transforms, "Loop transformations applied to device loops before offloading: all, none, or a comma separated list of fuse, swap, split, jam, skew")->capture_default_str()->group(group_backend_codegen_options);
+        app.add_option("--gpu-cache-bytes", compiler_options.po.gpu_cache_bytes, "The size in bytes of the device's last-level cache that the device loop transformations assume (default: the size the device reports at run time)")->group(group_backend_codegen_options);
+        app.add_option("--gpu-split-min-iterations", compiler_options.po.gpu_split_min_iterations, "The fewest iterations of a device loop that index-set splitting splits when the loop runs; smaller loops run as written (0: split every loop that has an interior)")->capture_default_str()->group(group_backend_codegen_options);
 
         // Symbol and lookup-related flags
         app.add_flag("--lookup-name", compiler_options.lookup_name, "Lookup a name specified by --line & --column in the ASR")->group(group_symbol_lookup_options);
@@ -411,6 +427,20 @@ namespace LCompilers::CommandLineInterface {
             app.parse(args);
         }
 
+        if (!opts.emscripten_settings.empty()
+                && ((opts.arg_backend != "llvm" && opts.arg_backend != "mlir")
+                    || !startswith(compiler_options.target, "wasm")
+                    || !endswith(compiler_options.target, "emscripten"))) {
+            throw lc::LCompilersException(
+                "error: -s settings require an LLVM-based backend and an emscripten target");
+        }
+
+        // With fallthrough, extra positionals after fmt or pywrap land in the
+        // main input files, which these subcommands do not use
+        if ((*fmt || *pywrap) && !opts.arg_files.empty()) {
+            throw CLI::ExtrasError(opts.arg_files);
+        }
+
         if (opts.disable_style_suggestions) {
             compiler_options.show_style_suggestions = false;
         }
@@ -454,6 +484,7 @@ namespace LCompilers::CommandLineInterface {
             compiler_options.print_leading_space = true;
             compiler_options.logical_casting = false;
             compiler_options.po.realloc_lhs_arrays = true;
+            compiler_options.std_f23_conformance = true;
         } else if (opts.arg_standard == "legacy") {
             // f23
             compiler_options.show_style_suggestions = false;
@@ -527,6 +558,13 @@ namespace LCompilers::CommandLineInterface {
                 "The GPU backend `" + compiler_options.gpu_backend
                 + "` is not supported; supported values: metal, cuda, cuda_cpu"
             );
+        }
+        {
+            std::string message;
+            if (!lc::gpu_loop_transforms_valid(
+                    compiler_options.po.gpu_loop_transforms, message)) {
+                throw lc::LCompilersException(message);
+            }
         }
 
         for (auto &f_flag : opts.f_flags) {
@@ -631,9 +669,18 @@ namespace LCompilers::CommandLineInterface {
             throw lc::LCompilersException("Cannot use --disable-implicit-argument-casting and --implicit-argument-casting at the same time");
         }
 
+        // The source file whose extension selects the fixed form and
+        // preprocessing below: fmt and pywrap take their own file
+        std::string source_file = opts.arg_file;
+        if (*fmt) {
+            source_file = opts.arg_fmt_file;
+        } else if (*pywrap) {
+            source_file = opts.arg_pywrap_file;
+        }
+
         // Decide if a file is fixed format based on the extension
         // Gfortran does the same thing
-        if (opts.fixed_form_infer && (endswith(opts.arg_file, ".f") || endswith(opts.arg_file, ".F"))) {
+        if (opts.fixed_form_infer && (endswith(source_file, ".f") || endswith(source_file, ".F"))) {
             compiler_options.fixed_form = true;
         }
 
@@ -653,7 +700,7 @@ namespace LCompilers::CommandLineInterface {
             compiler_options.c_preprocessor = false;
         // Decide if a file gets preprocessing based on the extension
         // Gfortran does the same thing
-        } else if (opts.cpp_infer && (endswith(opts.arg_file, ".F90") || endswith(opts.arg_file, ".F"))) {
+        } else if (opts.cpp_infer && (endswith(source_file, ".F90") || endswith(source_file, ".F"))) {
             compiler_options.c_preprocessor = true;
         } else {
             compiler_options.c_preprocessor = false;

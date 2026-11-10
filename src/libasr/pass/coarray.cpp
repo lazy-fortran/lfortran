@@ -2084,6 +2084,11 @@ class PRIFInterface {
             int64_t corank = var->n_codims;
             Vec<ASR::expr_t*> lco_elems; lco_elems.reserve(al, corank);
             Vec<ASR::expr_t*> uco_elems; uco_elems.reserve(al, corank > 1 ? corank - 1 : 0);
+            // The cobounds are copied rather than shared: the call may land
+            // in another procedure (a startup initializer), and a later pass
+            // that rewrites a variable reference there must not rewrite the
+            // declaration's codimensions along with it.
+            ASRUtils::ExprStmtDuplicator duplicator(al);
             for (int64_t ci = 0; ci < corank; ci++) {
                 ASR::expr_t *lb_expr = nullptr;
                 ASR::expr_t *ub_expr = nullptr;
@@ -2097,7 +2102,8 @@ class PRIFInterface {
                 }
 
                 if (lb_expr) {
-                    lco_elems.push_back(al, b.i2i_t(lb_expr, i64));
+                    lco_elems.push_back(al,
+                        b.i2i_t(duplicator.duplicate_expr(lb_expr), i64));
                 } else {
                     lco_elems.push_back(al, b.i64(1));
                 }
@@ -2106,7 +2112,8 @@ class PRIFInterface {
                     LCOMPILERS_ASSERT(ub_expr == nullptr);
                 } else {
                     LCOMPILERS_ASSERT(ub_expr);
-                    uco_elems.push_back(al, b.i2i_t(ub_expr, i64));
+                    uco_elems.push_back(al,
+                        b.i2i_t(duplicator.duplicate_expr(ub_expr), i64));
                 }
             }
             
@@ -2399,7 +2406,7 @@ class PRIFInterface {
             if (sc.init_value) {
                 body.push_back(al, ASRUtils::STMT(
                     ASR::make_Assignment_t(al, loc, bound, sc.init_value,
-                        nullptr, false, false)));
+                        nullptr, false, false, false, false)));
             }
         }
 
@@ -2788,7 +2795,7 @@ class PRIFInterface {
                     ASR::cast_kindType::IntegerToInteger, type, nullptr, nullptr));
                 
                 body.push_back(al, ASRUtils::STMT(ASR::make_Assignment_t(
-                    al, loc, ASRUtils::EXPR(ASR::make_Var_t(al, loc, ret_sym)), cast_res, nullptr, false, false)));
+                    al, loc, ASRUtils::EXPR(ASR::make_Var_t(al, loc, ret_sym)), cast_res, nullptr, false, false, false, false)));
 
                 Vec<char*> deps;
                 deps.reserve(al, 1);
@@ -2875,7 +2882,7 @@ class PRIFInterface {
                     ASR::cast_kindType::IntegerToInteger, type, nullptr, nullptr));
                 
                 body.push_back(al, ASRUtils::STMT(ASR::make_Assignment_t(
-                    al, loc, ASRUtils::EXPR(ASR::make_Var_t(al, loc, ret_sym)), cast_res, nullptr, false, false)));
+                    al, loc, ASRUtils::EXPR(ASR::make_Var_t(al, loc, ret_sym)), cast_res, nullptr, false, false, false, false)));
 
                 Vec<char*> deps;
                 deps.reserve(al, 1);
@@ -3068,7 +3075,7 @@ class CoarrayPrifReplacer : public ASR::BaseExprReplacer<CoarrayPrifReplacer> {
         void replace_IntrinsicArrayFunction(ASR::IntrinsicArrayFunction_t *x) {
             if (x->m_arr_intrinsic_id == static_cast<int64_t>(ASRUtils::IntrinsicArrayFunctions::Coshape)) {
                 ASR::expr_t *coarray = x->m_args[0];
-                int corank = ASRUtils::expr_corank(coarray);
+                int corank = checked_integer_cast<int>(ASRUtils::expr_corank(coarray));
                 *current_expr = prif.make_prif_coshape_call(x->base.base.loc, x->m_type, corank, coarray);
             } else {
                 ASR::BaseExprReplacer<CoarrayPrifReplacer>::replace_IntrinsicArrayFunction(x);
@@ -3165,12 +3172,12 @@ class CoarrayPrifVisitor : public ASR::CallReplacerOnExpressionsVisitor<CoarrayP
             then_body.push_back(replacer.al, ASRUtils::STMT(ASR::make_Allocate_t(
                 replacer.al, loc, alloc_args.p, alloc_args.n, nullptr, nullptr, nullptr)));
             then_body.push_back(replacer.al, ASRUtils::STMT(ASR::make_Assignment_t(
-                replacer.al, loc, tmp_var, a, nullptr, false, false)));
+                replacer.al, loc, tmp_var, a, nullptr, false, false, false, false)));
             then_body.push_back(replacer.al, call_tmp);
             then_body.push_back(replacer.al, ASRUtils::STMT(ASR::make_Assignment_t(
-                replacer.al, loc, a, tmp_var, nullptr, false, false)));
+                replacer.al, loc, a, tmp_var, nullptr, false, false, false, false)));
             then_body.push_back(replacer.al, ASRUtils::STMT(ASR::make_ExplicitDeallocate_t(
-                replacer.al, loc, dealloc_vars.p, dealloc_vars.n)));
+                replacer.al, loc, dealloc_vars.p, dealloc_vars.n, nullptr, nullptr)));
 
             Vec<ASR::stmt_t*> else_body; else_body.reserve(replacer.al, 1);
             else_body.push_back(replacer.al, call_orig);
@@ -3385,6 +3392,20 @@ class CoarrayPrifVisitor : public ASR::CallReplacerOnExpressionsVisitor<CoarrayP
                                 size_t n_codims = x->m_args[j].n_codims;
                                 replacer.prif.make_allocate_coarray_stmts(
                                     x->base.base.loc, a, dims, n_dims, codims, n_codims, x->m_stat, x->m_errmsg, body, x->m_source);
+                                // The Allocate is replaced, so the array_op
+                                // pass does not copy SOURCE= into the new
+                                // elements of an array: copy it here. The
+                                // elements are defined by the copy, not
+                                // finalized (F2018 7.5.6.3).
+                                if (x->m_source && x->m_args[j].m_type == nullptr &&
+                                        ASRUtils::is_array(ASRUtils::expr_type(a))) {
+                                    ASRUtils::ExprStmtDuplicator duplicator(replacer.al);
+                                    ASR::expr_t *source_copy = duplicator.duplicate_expr(x->m_source);
+                                    body.push_back(replacer.al, ASRUtils::STMT(
+                                        ASRUtils::make_Assignment_t_util(replacer.al,
+                                            x->base.base.loc, a, source_copy, nullptr,
+                                            false, false, true)));
+                                }
                             } else {
                                 non_coarray_args.push_back(replacer.al, x->m_args[j]);
                             }
@@ -3429,14 +3450,14 @@ class CoarrayPrifVisitor : public ASR::CallReplacerOnExpressionsVisitor<CoarrayP
                             }
                             if (is_co) {
                                 replacer.prif.make_deallocate_coarray_stmts(
-                                    x->base.base.loc, a, nullptr, nullptr, body);
+                                    x->base.base.loc, a, x->m_stat, x->m_errmsg, body);
                             } else {
                                 non_coarray_vars.push_back(replacer.al, a);
                             }
                         }
                         if (non_coarray_vars.size() > 0) {
                             ASR::stmt_t *new_dealloc = ASRUtils::STMT(ASR::make_ExplicitDeallocate_t(
-                                replacer.al, x->base.base.loc, non_coarray_vars.p, non_coarray_vars.size()));
+                                replacer.al, x->base.base.loc, non_coarray_vars.p, non_coarray_vars.size(), x->m_stat, x->m_errmsg));
                             body.push_back(replacer.al, new_dealloc);
                         }
                     } else {
@@ -3586,17 +3607,21 @@ void pass_replace_coarray(Allocator &al, ASR::TranslationUnit_t &unit,
         return;
     }
     PRIFInterface prif(al, unit, po.separate_compilation);
-    // Phase 1: Declare coarray companion variables
-    CoarrayCompanionVisitor comp_v(prif);
-    comp_v.visit_TranslationUnit(unit);
+    // The `lcompilers_prif_*` helpers are defined in every translation unit
+    // that needs them, so they must not be exported.
+    PassUtils::make_new_tu_functions_private(unit, [&]() {
+        // Phase 1: Declare coarray companion variables
+        CoarrayCompanionVisitor comp_v(prif);
+        comp_v.visit_TranslationUnit(unit);
 
-    // Phase 2: Create allocation calls for coarrays
-    CoarrayInitVisitor init_v(al, prif);
-    init_v.visit_TranslationUnit(unit);
+        // Phase 2: Create allocation calls for coarrays
+        CoarrayInitVisitor init_v(al, prif);
+        init_v.visit_TranslationUnit(unit);
 
-    // Phase 3: Replace coarray expressions
-    CoarrayPrifVisitor v(al, prif);
-    v.visit_TranslationUnit(unit);
+        // Phase 3: Replace coarray expressions
+        CoarrayPrifVisitor v(al, prif);
+        v.visit_TranslationUnit(unit);
+    });
 
     // Phase 4: Update dependencies
     PassUtils::UpdateDependenciesVisitor(al).visit_TranslationUnit(unit);

@@ -35,6 +35,10 @@ src/bin/lfortran integration_tests/intrinsics_04s.f90 -o intrinsics_04s
 src/bin/lfortran integration_tests/intrinsics_04.f90 -o intrinsics_04
 ./intrinsics_04
 
+# Exercise the Windows clock runtime even when the integration runner is skipped.
+src/bin/lfortran integration_tests/system_clock_02.f90 -o system_clock_02
+./system_clock_02
+
 
 # Run all tests (does not work on Windows yet):
 cmake --version
@@ -53,7 +57,13 @@ if [[ $WIN != "1" ]]; then
     echo "NPROC: ${NPROC}"
 
     if [[ $LFORTRAN_LLVM_VERSION == "11" ]]; then
-        ./run_tests.py
+        if [[ $MACOS != "1" ]]; then
+            ./run_tests.py
+        else
+            if [[ $LFORTRAN_TEST_SUITE != "smoke" ]]; then
+                ./run_tests.py
+            fi
+        fi
     fi
 
     cd integration_tests
@@ -69,16 +79,23 @@ if [[ $WIN != "1" ]]; then
     ctest -j${NPROC} -R program_cmake
     cd ..
 
-    ./run_tests.py -b llvm llvm2 llvm_rtlib llvm_nopragma llvm_integer_8 llvmImplicit -j${NPROC}
-    if [[ $MACOS != "1" ]]; then
-        ./run_tests.py -b llvm2 llvm_rtlib llvm_nopragma llvm_integer_8 -f -j${NPROC}
+    # `shell` passes an empty expansion as an argument, unlike Bash. Keep
+    # the optional --smoke flag explicit rather than expanding an empty string.
+    if [[ $LFORTRAN_TEST_SUITE == "smoke" ]]; then
+        ./run_tests.py -b llvm llvm2 llvm_rtlib llvm_nopragma llvm_integer_8 llvmImplicit -j${NPROC} --smoke
+        if [[ $MACOS != "1" ]]; then
+            ./run_tests.py -b llvm2 llvm_rtlib llvm_nopragma llvm_integer_8 -f -j${NPROC} --smoke
+            ./run_tests.py -b llvm llvmImplicit -f -j${NPROC} --smoke
+        fi
+        ./run_tests.py -b llvm_submodule -j${NPROC} --smoke
+    else
+        ./run_tests.py -b llvm llvm2 llvm_rtlib llvm_nopragma llvm_integer_8 llvmImplicit -j${NPROC}
+        if [[ $MACOS != "1" ]]; then
+            ./run_tests.py -b llvm2 llvm_rtlib llvm_nopragma llvm_integer_8 -f -j${NPROC}
+            ./run_tests.py -b llvm llvmImplicit -f -j${NPROC}
+        fi
+        ./run_tests.py -b llvm_submodule -j${NPROC}
     fi
-    if [[ $MACOS != "1" ]]; then
-        ./run_tests.py -b llvm llvmImplicit -f -j${NPROC}
-    fi
-    ./run_tests.py -b llvm_submodule -j${NPROC}
-    # llvm -sc, llvm_submodule -sc, and --detect-leaks live in Exhaustive
-    # checks (debug_outOfSource) so this Quick job stays under an hour.
     cd ..
 
     pip install src/server/tests tests/server

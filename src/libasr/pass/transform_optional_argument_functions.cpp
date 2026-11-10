@@ -182,7 +182,7 @@ class TransformFunctionsWithOptionalArguments: public PassUtils::PassVisitor<Tra
                 new_args.push_back(al, s->m_args[i]);
                 new_arg_types.push_back(al, ASRUtils::get_FunctionType(*s)->m_arg_types[i]);
                 if( is_presence_optional(arg_sym, true) ) {
-                    sym2optionalargidx[&(s->base)].push_back(new_args.size() - 1);
+                    sym2optionalargidx[&(s->base)].push_back(checked_integer_cast<int32_t>(new_args.size() - 1));
                     std::string presence_bit_arg_name = "__libasr_is_present_" + std::string(ASRUtils::symbol_name(arg_sym));
                     presence_bit_arg_name = s->m_symtab->get_unique_name(presence_bit_arg_name, false);
                     ASR::expr_t* presence_bit_arg = PassUtils::create_auxiliary_variable(
@@ -268,20 +268,26 @@ class TransformFunctionsWithOptionalArguments: public PassUtils::PassVisitor<Tra
             }
         }
 
+        // The procedures declared in a procedure, program or module,
+        // including in its BLOCK constructs
+        void transform_procedures_in_scope_and_constructs(SymbolTable *scope) {
+            ASRUtils::for_each_symbol_in_scope_and_constructs(scope, [&](ASR::symbol_t *sym) {
+                if (is_a<ASR::Function_t>(*sym)) {
+                    ASR::Function_t *s = down_cast<ASR::Function_t>(sym);
+                    if (is_optional_argument_present(s)) {
+                        transform_functions_with_optional_arguments(s);
+                    }
+                }
+            });
+        }
+
         void visit_Program(const ASR::Program_t &x) {
             // FIXME: this is a hack, we need to pass in a non-const `x`,
             // which requires to generate a TransformVisitor.
             ASR::Program_t &xx = const_cast<ASR::Program_t&>(x);
             current_scope = xx.m_symtab;
 
-            for (auto &item : x.m_symtab->get_scope()) {
-                if (is_a<ASR::Function_t>(*item.second)) {
-                    ASR::Function_t *s = down_cast<ASR::Function_t>(item.second);
-                    if (is_optional_argument_present(s)) {
-                        transform_functions_with_optional_arguments(s);
-                    }
-                }
-            }
+            transform_procedures_in_scope_and_constructs(x.m_symtab);
 
             for (auto &item : x.m_symtab->get_scope()) {
                 if (is_a<ASR::AssociateBlock_t>(*item.second)) {
@@ -305,14 +311,7 @@ class TransformFunctionsWithOptionalArguments: public PassUtils::PassVisitor<Tra
             ASR::Module_t &xx = const_cast<ASR::Module_t&>(x);
             current_scope = xx.m_symtab;
 
-            for (auto &item : x.m_symtab->get_scope()) {
-                if (is_a<ASR::Function_t>(*item.second)) {
-                    ASR::Function_t *s = down_cast<ASR::Function_t>(item.second);
-                    if (is_optional_argument_present(s)) {
-                        transform_functions_with_optional_arguments(s);
-                    }
-                }
-            }
+            transform_procedures_in_scope_and_constructs(x.m_symtab);
 
             for (auto &item : x.m_symtab->get_scope()) {
                 if (is_a<ASR::AssociateBlock_t>(*item.second)) {
@@ -333,14 +332,7 @@ class TransformFunctionsWithOptionalArguments: public PassUtils::PassVisitor<Tra
             ASR::Function_t &xx = const_cast<ASR::Function_t&>(x);
             current_scope = xx.m_symtab;
 
-            for (auto &item : x.m_symtab->get_scope()) {
-                if (is_a<ASR::Function_t>(*item.second)) {
-                    ASR::Function_t *s = down_cast<ASR::Function_t>(item.second);
-                    if (is_optional_argument_present(s)) {
-                        transform_functions_with_optional_arguments(s);
-                    }
-                }
-            }
+            transform_procedures_in_scope_and_constructs(x.m_symtab);
 
             for (auto &item : x.m_symtab->get_scope()) {
                 if (is_a<ASR::AssociateBlock_t>(*item.second)) {
@@ -382,10 +374,9 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
         ASR::Variable_t* v = ASR::down_cast<ASR::Variable_t>(func_sym);
         LCOMPILERS_ASSERT(ASR::is_a<ASR::FunctionType_t>(*ASRUtils::extract_type(v->m_type)));
         func_sym = ASRUtils::symbol_get_past_external(v->m_type_declaration);
-        ASR::ttype_t* new_type = ASRUtils::TYPE(
-            ASRUtils::ExprStmtWithScopeDuplicator(al, scope).
-                duplicate_FunctionType(ASRUtils::get_FunctionType(
-                    ASR::down_cast<ASR::Function_t>(ASRUtils::symbol_get_past_external(v->m_type_declaration)))));
+        ASR::ttype_t* new_type = ASRUtils::import_procedure_type(al,
+            ASRUtils::ExprStmtDuplicator(al).duplicate_ttype(ASR::down_cast<ASR::Function_t>(
+                func_sym)->m_function_signature), v->m_parent_symtab);
         if (ASR::is_a<ASR::Pointer_t>(*v->m_type)) {
             new_type = ASRUtils::TYPE(ASR::make_Pointer_t(al, v->base.base.loc, new_type));
         }
@@ -393,7 +384,7 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
     }
     if (ASR::is_a<ASR::StructMethodDeclaration_t>(*func_sym)) {
         ASR::StructMethodDeclaration_t* class_proc = ASR::down_cast<ASR::StructMethodDeclaration_t>(func_sym);
-        func_sym = class_proc->m_proc;
+        func_sym = ASRUtils::symbol_get_past_external(class_proc->m_proc);
     }
 
     if (!ASR::is_a<ASR::Function_t>(*func_sym)) {
@@ -428,13 +419,15 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                 std::string m_arg_i_name = scope->get_unique_name("__libasr_created_variable_");
                 ASR::ttype_t* arg_type = ASRUtils::duplicate_type(al, func_arg_j->m_type);
                 if(ASR::is_a<ASR::String_t>(*ASRUtils::extract_type(arg_type))){// Create String type with dummy len info.
-                    arg_type = ASRUtils::duplicate_type(al, arg_type); // New-duplicated node
                     ASR::String_t* str = ASR::down_cast<ASR::String_t>(
                         ASRUtils::extract_type(arg_type));
-                    if( str->m_len &&
-                        !ASR::is_a<ASR::IntegerConstant_t>(*str->m_len)){
+                    // The absent argument is represented by a local, which
+                    // cannot inherit an assumed length from the dummy.
+                    if( str->m_len_kind == ASR::AssumedLength ||
+                        (str->m_len && !ASR::is_a<ASR::IntegerConstant_t>(*str->m_len))){
                         str->m_len = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, arg_type->base.loc, 0,
                             ASRUtils::TYPE(ASR::make_Integer_t(al, arg_type->base.loc, 4))));
+                        str->m_len_kind = ASR::ExpressionLength;
                     }
                 }
                 ASR::symbol_t* arg_decl = func_arg_j->m_type_declaration;
@@ -556,9 +549,14 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                 // This is to avoid calling the function more than once
                 if (ASR::is_a<ASR::FunctionCall_t>(*arg_expr)) {
                     std::string dummy_variable_name = scope->get_unique_name("__libasr_created_dummy_variable_functioncall_");
+                    ASR::symbol_t* arg_expr_decl = nullptr;
+                    if (ASR::is_a<ASR::StructType_t>(*ASRUtils::extract_type(arg_expr_type))) {
+                        arg_expr_decl = ASRUtils::import_struct_sym_as_external(
+                            al, x.m_args[i].loc, arg_expr, scope);
+                    }
                     ASR::expr_t* dummy_variable = PassUtils::create_auxiliary_variable(
                         x.m_args[i].loc, dummy_variable_name, al, scope,
-                        arg_expr_type, ASR::intentType::Local);
+                        arg_expr_type, ASR::intentType::Local, arg_expr_decl);
                     ASR::stmt_t* assignment = ASRUtils::STMT(
                             ASRUtils::make_Assignment_t_util(al, x.m_args[i].loc, dummy_variable,
                                 arg_expr, nullptr, false, ASRUtils::is_array(arg_expr_type)));
@@ -579,6 +577,20 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                 // This is to prevent passing in unallocated arguments when non-allocatable arguments are expected by the procedure
                 ASR::symbol_t* arg_decl = func_arg_j->m_type_declaration;
                 ASR::ttype_t* dummy_variable_type = ASRUtils::duplicate_type(al, func_arg_j->m_type);
+                ASR::expr_t* dummy_decl_var = func->m_args[j];
+
+                // The pointer variable has the type of the actual argument, so
+                // for a derived type actual it must also take its declaration
+                // from the actual argument, not from the (possibly polymorphic
+                // or parent type) dummy argument
+                ASR::symbol_t* pointer_decl = arg_decl;
+                ASR::expr_t* pointer_decl_var = func->m_args[j];
+                bool is_struct_actual = ASR::is_a<ASR::StructType_t>(
+                    *ASRUtils::extract_type(arg_expr_type));
+                if (is_struct_actual) {
+                    pointer_decl = nullptr;
+                    pointer_decl_var = arg_expr;
+                }
 
                 // We make dummy variable allocatable if class type because 
                 // local class variable should be llvm pointer
@@ -588,6 +600,10 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                 }
                 if (arg_decl && ASRUtils::is_unlimited_polymorphic_type(arg_decl)) {
                     dummy_variable_type = ASRUtils::duplicate_type(al, ASRUtils::type_get_past_allocatable_pointer(arg_expr_type));
+                    if (is_struct_actual) {
+                        arg_decl = nullptr;
+                        dummy_decl_var = arg_expr;
+                    }
                 }
                 {
                     ASR::ttype_t* formal_t = func_arg_j->m_type;
@@ -622,8 +638,7 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                         dims.push_back(al, dim);
                     }
                     ASR::array_physical_typeType phy_type = ASR::array_physical_typeType::FixedSizeArray;
-                    if (ASRUtils::is_string_only(ASRUtils::extract_type(dummy_variable_type)) ||
-                            ASRUtils::is_class_type(ASRUtils::extract_type(dummy_variable_type))) {
+                    if (ASRUtils::is_string_only(ASRUtils::extract_type(dummy_variable_type))) {
                         phy_type = ASR::array_physical_typeType::PointerArray;
                     }
                     dummy_variable_type = ASRUtils::TYPE(
@@ -663,8 +678,7 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                             dims.push_back(al, dim);
                         }
                         ASR::array_physical_typeType phy_type = ASR::array_physical_typeType::FixedSizeArray;
-                        if (ASRUtils::is_string_only(elem_type) ||
-                                ASRUtils::is_class_type(elem_type)) {
+                        if (ASRUtils::is_string_only(elem_type)) {
                             phy_type = ASR::array_physical_typeType::PointerArray;
                         }
                         dummy_variable_type = ASRUtils::TYPE(
@@ -675,20 +689,32 @@ bool fill_new_args(Vec<ASR::call_arg_t>& new_args, Allocator& al,
                         dummy_variable_type = elem_type;
                     }
                 }
-                std::string dummy_variable_name = scope->get_unique_name("__libasr_created_dummy_variable_");
-                ASR::expr_t* dummy_variable = PassUtils::create_auxiliary_variable(
-                    x.m_args[i].loc, dummy_variable_name, al, scope, dummy_variable_type, ASR::intentType::Local, arg_decl, func->m_args[j]);
-
                 std::string pointer_name = scope->get_unique_name("__libasr_created_variable_pointer_");
                 pointer_variable_type = ASRUtils::TYPE(ASR::make_Pointer_t(al, pointer_variable_type->base.loc, pointer_variable_type));
                 ASR::expr_t* pointer_variable = PassUtils::create_auxiliary_variable(
-                    x.m_args[i].loc, pointer_name, al, scope, pointer_variable_type, ASR::intentType::Local, arg_decl, func->m_args[j]);
+                    x.m_args[i].loc, pointer_name, al, scope, pointer_variable_type, ASR::intentType::Local, pointer_decl, pointer_decl_var);
 
                 ASRUtils::ASRBuilder builder(al, x.base.base.loc);
 
                 std::vector<ASR::stmt_t*> if_body, else_body;
-                if_body.push_back(ASRUtils::STMT(ASR::make_Associate_t(al, dummy_variable_type->base.loc, pointer_variable, arg_expr)));
-                else_body.push_back(ASRUtils::STMT(ASR::make_Associate_t(al, dummy_variable_type->base.loc, pointer_variable, dummy_variable)));
+                if_body.push_back(ASRUtils::STMT(ASR::make_Associate_t(al, dummy_variable_type->base.loc, pointer_variable, arg_expr, ASR::pointer_bounds_formType::NoPointerBounds)));
+                if (ASRUtils::is_array(dummy_variable_type) &&
+                        ASRUtils::is_class_type(ASRUtils::extract_type(dummy_variable_type))) {
+                    // A local non-allocatable polymorphic array has no dynamic
+                    // type, so there is no dummy to point to. The argument is
+                    // passed as absent and never accessed, so pass a
+                    // disassociated pointer instead.
+                    Vec<ASR::expr_t*> nullify_vars;
+                    nullify_vars.reserve(al, 1);
+                    nullify_vars.push_back(al, pointer_variable);
+                    else_body.push_back(ASRUtils::STMT(ASR::make_Nullify_t(al,
+                        dummy_variable_type->base.loc, nullify_vars.p, nullify_vars.size())));
+                } else {
+                    std::string dummy_variable_name = scope->get_unique_name("__libasr_created_dummy_variable_");
+                    ASR::expr_t* dummy_variable = PassUtils::create_auxiliary_variable(
+                        x.m_args[i].loc, dummy_variable_name, al, scope, dummy_variable_type, ASR::intentType::Local, arg_decl, dummy_decl_var);
+                    else_body.push_back(ASRUtils::STMT(ASR::make_Associate_t(al, dummy_variable_type->base.loc, pointer_variable, dummy_variable, ASR::pointer_bounds_formType::NoPointerBounds)));
+                }
 
                 pass_result.push_back(al, builder.If(is_allocated, if_body, else_body));
 

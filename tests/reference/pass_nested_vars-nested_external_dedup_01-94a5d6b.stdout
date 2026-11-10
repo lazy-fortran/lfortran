@@ -27,9 +27,11 @@
                                     ()
                                     .false.
                                     .false.
+                                    .false.
                                     NotMethod
                                     ()
                                     []
+                                    ()
                                 )
                         })
                     __lcompilers_created__nested_context__nested_external_dedup_01__outer_
@@ -70,9 +72,11 @@
                                                     ()
                                                     .false.
                                                     .false.
+                                                    .false.
                                                     NotMethod
                                                     ()
                                                     []
+                                                    ()
                                                 ),
                                             a1:
                                                 (ExternalSymbol
@@ -140,6 +144,8 @@
                                                         ()
                                                         .false.
                                                         .false.
+                                                        .false.
+                                                        .false.
                                                     )]
                                                     ()
                                                     Public
@@ -193,6 +199,8 @@
                                                         ()
                                                         .false.
                                                         .false.
+                                                        .false.
+                                                        .false.
                                                     )]
                                                     ()
                                                     Public
@@ -225,11 +233,15 @@
                                         ()
                                         .false.
                                         .false.
+                                        .false.
+                                        .false.
                                     )
                                     (Assignment
                                         (Var 3 a_nested_ctx)
                                         (Var 3 a)
                                         ()
+                                        .false.
+                                        .false.
                                         .false.
                                         .false.
                                     )
@@ -246,11 +258,15 @@
                                         ()
                                         .false.
                                         .false.
+                                        .false.
+                                        .false.
                                     )
                                     (Assignment
                                         (Var 3 a_nested_ctx)
                                         (Var 3 a)
                                         ()
+                                        .false.
+                                        .false.
                                         .false.
                                         .false.
                                     )
@@ -265,6 +281,8 @@
                                         (Var 3 a)
                                         (Var 3 a_nested_ctx)
                                         ()
+                                        .false.
+                                        .false.
                                         .false.
                                         .false.
                                     )]
