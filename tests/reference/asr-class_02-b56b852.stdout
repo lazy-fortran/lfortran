@@ -49,6 +49,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             circle_print:
                                                 (StructMethodDeclaration
@@ -60,6 +61,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             radius:
                                                 (Variable
@@ -563,6 +565,7 @@
                     class_circle2
                     ()
                     [class_circle2]
+                    .false.
                     .false.
                     .false.
                     .false.

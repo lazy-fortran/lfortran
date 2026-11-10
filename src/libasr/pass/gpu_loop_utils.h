@@ -100,9 +100,11 @@ ASR::stmt_t *gpu_loop_nest_with_body(Allocator &al, const GpuLoopNest &nest,
 
 // A parallel loop nest assigned to the device that copies every element of
 // the array `src` into the array `dest` of the same bounds, with index
-// variables of its own in `scope`.
+// variables of its own in `scope`, of integer kind `index_kind` (the kind
+// the device computes element offsets in, so that any bound fits).
 ASR::stmt_t *gpu_device_copy_nest(Allocator &al, const Location &loc,
-    SymbolTable *scope, ASR::expr_t *dest, ASR::expr_t *src);
+    SymbolTable *scope, ASR::expr_t *dest, ASR::expr_t *src,
+    int index_kind);
 
 // The designator an array is named by (a variable or a chain of
 // non-pointer components of one), as a key, or "".
@@ -158,14 +160,22 @@ public:
 // variables hold the results and the locals of the inlined bodies, so they
 // are private to an iteration. `select` picks the calls; a picked call that
 // cannot be inlined (see gpu_function_inlinable) makes `run` fail and leave
-// the scope as it was.
+// the scope as it was. The subscripts of an array dummy are shifted by the
+// lower bound of the actual argument in integer(`offset_kind`), the kind
+// the device computes element offsets in
+// (GpuDeviceCapabilities::offset_kind).
 class GpuInliner {
 public:
     GpuInliner(Allocator &al_,
-        std::function<bool(ASR::FunctionCall_t*)> select_)
-        : al(al_), select(select_) {}
+        std::function<bool(ASR::FunctionCall_t*)> select_, int offset_kind_)
+        : al(al_), select(select_), offset_kind(offset_kind_) {}
     // Inlines in place; false when a picked call cannot be inlined.
     bool run(SymbolTable *scope, ASR::stmt_t **&body, size_t &n_body);
+    // Whether a function whose body holds a STOP or ERROR STOP may be
+    // inlined (gpu_function_inlinable): the statement then runs where the
+    // call was, in the same order. Off by default, since the loop
+    // transformations reorder what they inline across iterations.
+    bool allow_stops = false;
     // Removes every symbol `run` added (after a failure).
     void rollback();
     std::vector<std::pair<SymbolTable*, std::string>> added;
@@ -173,6 +183,7 @@ public:
 private:
     Allocator &al;
     std::function<bool(ASR::FunctionCall_t*)> select;
+    int offset_kind;
     int depth = 0;
     bool inline_stmts(SymbolTable *scope, ASR::stmt_t **&body,
         size_t &n_body);
@@ -184,9 +195,9 @@ private:
 
 // Whether calls of `fn` can be inlined: a pure function with a body and a
 // scalar result, scalar dummies and assumed-shape array dummies, scalar
-// locals without initialization, and no RETURN, STOP, input/output or
-// subroutine call.
-bool gpu_function_inlinable(ASR::Function_t *fn);
+// locals without initialization, and no RETURN, input/output or subroutine
+// call, nor a STOP or ERROR STOP unless `allow_stops`.
+bool gpu_function_inlinable(ASR::Function_t *fn, bool allow_stops = false);
 
 // Whether a function names no variable but its own dummy arguments and
 // locals (named constants aside) and calls only procedures that do the
@@ -287,6 +298,33 @@ void gpu_collect_address_taken(ASR::TranslationUnit_t &unit,
 // or asynchronous one. Named constants never change.
 bool gpu_may_be_aliased(ASR::symbol_t *s,
     const std::set<ASR::symbol_t*> &address_taken);
+
+struct GpuWorkspaceGuardSite {
+    ASR::If_t *branch;
+    SymbolTable *scope;
+    bool negated;
+};
+
+struct GpuWorkspaceGuard {
+    ASR::If_t *branch;
+    bool on_true;
+    SymbolTable *scope;
+    std::vector<SymbolTable*> use_scopes;
+    std::vector<GpuWorkspaceGuardSite> sites;
+};
+
+ASR::expr_t *gpu_workspace_condition(ASR::expr_t *test, bool &negated);
+bool gpu_same_workspace_condition(ASR::expr_t *left, ASR::expr_t *right);
+
+// Typed uniform predicate facts common to every data use. Inquiries of a simple
+// array designator do not access data; address transport and unknown uses fence it.
+std::vector<GpuWorkspaceGuard> gpu_workspace_data_guards(
+    const ASR::Function_t &kernel, ASR::symbol_t *workspace);
+
+// Total, side-effect-free expressions of ordinary scalar arguments only.
+bool gpu_uniform_workspace_condition(ASR::expr_t *condition,
+    const std::set<ASR::symbol_t*> &arguments, const SymbolTable *scope,
+    const std::set<ASR::symbol_t*> &address_taken = {});
 // Every variable whose value an expression reads: as gpu_collect_symbols,
 // but without the arrays of which it takes only bounds or the size
 // (`size(x)`, `ubound(x%a, 1)`), which writes to their elements do not

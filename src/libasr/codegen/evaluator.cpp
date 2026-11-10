@@ -37,6 +37,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar/InstSimplifyPass.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
@@ -60,6 +61,11 @@
 #if LLVM_VERSION_MAJOR >= 17
     // TODO: removed from LLVM 17
     #include <llvm/Passes/PassBuilder.h>
+    #include <llvm/Transforms/Scalar/LICM.h>
+    #include <llvm/Transforms/Scalar/LoopPassManager.h>
+    #include <llvm/Transforms/Scalar/SimpleLoopUnswitch.h>
+    #include <llvm/Transforms/Scalar/SROA.h>
+    #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #else
 #    include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #endif
@@ -98,6 +104,8 @@
 #include <libasr/codegen/KaleidoscopeJIT.h>
 #include <libasr/codegen/evaluator.h>
 #include <libasr/codegen/asr_to_llvm.h>
+#include <libasr/codegen/llvm_reductions.h>
+#include <libasr/codegen/llvm_rsqrt.h>
 #include <libasr/codegen/asr_to_cpp.h>
 #include <libasr/exception.h>
 #include <libasr/asr.h>
@@ -204,6 +212,17 @@ std::vector<std::string> get_detected_host_features()
     }
     std::sort(features.begin(), features.end());
     return features;
+}
+
+bool host_has_feature(const char *name)
+{
+#if LLVM_VERSION_MAJOR >= 19
+    auto host_features = llvm::sys::getHostCPUFeatures();
+#else
+    llvm::StringMap<bool, llvm::MallocAllocator> host_features;
+    llvm::sys::getHostCPUFeatures(host_features);
+#endif
+    return host_features.lookup(name);
 }
 
 #if defined(HAVE_TARGET_AARCH64) && LLVM_VERSION_MAJOR >= 18
@@ -343,6 +362,17 @@ std::string resolve_native_cpu(const llvm::Target &target,
     std::string cpu = get_host_cpu(option, config);
     if (!is_valid_cpu(target, triple, cpu)) {
         return "generic";
+    }
+    if (cpu == "generic") {
+        // LLVM reports "generic" for CPUs it does not recognize. Its generic
+        // cost model prefers 512-bit vectors, but known models with the same
+        // instruction set use 256-bit vectors, which is faster for small
+        // loops. Keep the detected features and only switch the CPU model.
+        if (host_has_feature("avx512f")) {
+            return "skylake-avx512";
+        } else if (host_has_feature("avx2")) {
+            return "haswell";
+        }
     }
     return cpu;
 }
@@ -554,6 +584,11 @@ std::unique_ptr<llvm::TargetMachine> create_target_machine(
 {
     const llvm::Target *target = get_llvm_target(config.triple);
     llvm::TargetOptions options;
+    // The IR of `--fast` already allows contraction (`fast` flags), but the
+    // AArch64 backend of LLVM 11 only fuses with this option.
+    if (config.fast_math) {
+        options.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+    }
     llvm::Triple triple(config.triple);
     // WebAssembly objects are linked into static executables (wasm-ld for
     // WASI, emcc for Emscripten), which do not need position independent
@@ -623,6 +658,8 @@ LLVMTargetConfig resolve_llvm_target_config(
 
     LLVMTargetConfig config;
     config.fast = compiler_options.po.fast;
+    config.fast_math = compiler_options.po.fast
+        && !compiler_options.po.no_fast_math;
     config.triple = compiler_options.target.empty()
         ? llvm::sys::getDefaultTargetTriple()
         : llvm::Triple::normalize(compiler_options.target);
@@ -671,6 +708,22 @@ LLVMTargetConfig resolve_llvm_target_config(
         validate_cpu(*target, triple, config.tune_cpu, "--mtune");
     }
 
+#if LLVM_VERSION_MAJOR < 10
+    // The x86 backends of LLVM 7, 8 and 9 add the fp128 register class (XMM)
+    // to an x86-64 subtarget only when it has MMX (X86ISelLowering.cpp:
+    // `is64Bit() && hasMMX()`). Without it, fp128 arguments are expanded into
+    // integer pairs, so real(16) arithmetic and comparisons call the libgcc
+    // helpers (e.g. __subtf3, __lttf2) with fp128 in general purpose
+    // registers, while libgcc and the psABI expect SSE registers, and every
+    // real(16) result is wrong. The "generic" CPU that we use by default has
+    // only x87 plus the 64-bit baseline SSE2, but no MMX. Target the x86-64
+    // baseline, which clang uses by default and which includes MMX. LLVM 10
+    // removed the MMX condition.
+    if (march.empty() && resolved_cpu.empty()
+            && triple.getArch() == llvm::Triple::x86_64) {
+        config.cpu = "x86-64";
+    }
+#endif
     config.features = join_features(features);
     std::unique_ptr<llvm::TargetMachine> machine
         = create_target_machine(config);
@@ -1012,6 +1065,25 @@ void LLVMEvaluator::create_empty_object_file(const std::string &filename) {
     save_object_file(*module, filename);
 }
 
+#if LLVM_VERSION_MAJOR < 9
+// IndVarSimplify in LLVM 7 and 8 can mark the increment of a loop counter
+// that starts at -1 (a DO loop starting at 0) as `nuw`. Unrolling an inner
+// loop by the upper bound of its trip count then trusts that flag, assumes at
+// least two iterations and drops the first exit test, so a one-trip loop runs
+// twice. LLVM 9 fixed this. X86 enables upper-bound unrolling for CPUs with a
+// loop buffer, so the miscompile depends on the host CPU under `--fast`.
+static void disable_upper_bound_unrolling() {
+    llvm::StringMap<llvm::cl::Option*> &options
+        = llvm::cl::getRegisteredOptions();
+    auto option = options.find("unroll-max-upperbound");
+    // The option may occur only once per process; opt() runs for every file
+    // and REPL cell.
+    if (option != options.end() && option->second->getNumOccurrences() == 0) {
+        option->second->addOccurrence(0, "unroll-max-upperbound", "0");
+    }
+}
+#endif
+
 void LLVMEvaluator::opt(llvm::Module &m) {
     configure_module(m);
 
@@ -1020,16 +1092,30 @@ void LLVMEvaluator::opt(llvm::Module &m) {
     llvm::FunctionAnalysisManager FAM;
     llvm::CGSCCAnalysisManager CGAM;
     llvm::ModuleAnalysisManager MAM;
-    llvm::PassBuilder PB = llvm::PassBuilder(TM.get());
+    // The default tuning options leave the SLP vectorizer off; clang and
+    // flang enable it at -O2 and -O3, as the legacy pipeline below does.
+    llvm::PipelineTuningOptions PTO;
+    PTO.LoopVectorization = true;
+    PTO.SLPVectorization = true;
+    llvm::PassBuilder PB = llvm::PassBuilder(TM.get(), PTO);
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
     PB.registerFunctionAnalyses(FAM);
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
     llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O3);
+    // Late simplifications expose invariant conditions guarding descriptor loads.
+    llvm::LoopPassManager LPM;
+    LPM.addPass(llvm::SimpleLoopUnswitchPass(/*NonTrivial=*/true));
+    LPM.addPass(llvm::LICMPass(llvm::LICMOptions()));
+    MPM.addPass(llvm::createModuleToFunctionPassAdaptor(
+        llvm::createFunctionToLoopPassAdaptor(std::move(LPM), /*UseMemorySSA=*/true)));
     MPM.run(m, MAM);
 
 #else
+#if LLVM_VERSION_MAJOR < 9
+    disable_upper_bound_unrolling();
+#endif
     llvm::legacy::PassManager mpm;
     mpm.add(new llvm::TargetLibraryInfoWrapperPass(TM->getTargetTriple()));
     mpm.add(llvm::createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
@@ -1055,6 +1141,113 @@ void LLVMEvaluator::opt(llvm::Module &m) {
     mpm.add(llvm::createVerifierPass());
     mpm.run(m);
 #endif
+    // expand_reciprocal_sqrt edits the IR outside the pass managers. On
+    // LLVM 17 and later the function analyses filled by MPM are then stale,
+    // and the late SROA round below would read them. The legacy pipeline
+    // has no analysis cache.
+#if LLVM_VERSION_MAJOR >= 17
+    std::vector<llvm::Function *> rsqrt_changed;
+    for (llvm::Function &f : m) {
+        if (expand_reciprocal_sqrt(f, TM->getTargetTriple())) {
+            rsqrt_changed.push_back(&f);
+        }
+    }
+#else
+    for (llvm::Function &f : m) {
+        expand_reciprocal_sqrt(f, TM->getTargetTriple());
+    }
+#endif
+
+    // The late cleanup and the horizontal reduction rewrite only run on
+    // functions that the rewrite may apply to: definitions for x86 with AVX
+    // that contain a fast sum of three vector squares. Other functions and
+    // targets (such as AArch64) keep the code of the pipeline above.
+    std::vector<llvm::Function *> late_functions;
+    for (llvm::Function &f : m) {
+        if (may_recombine_horizontal_reductions(f, *TM)) {
+            late_functions.push_back(&f);
+        }
+    }
+
+    // SROA runs before the vectorizer, so a fixed-size local array that the
+    // vectorized loop then accesses keeps its stack slot. Simplifying once
+    // more promotes it and exposes the reductions the vectorizer built.
+    // The loop passes after the last GVN also leave loads of memory that
+    // was set from constants, such as the values a loop starts from; GVN
+    // forwards them, so the horizontal reduction pass can see the
+    // components that stay zero across the loop.
+    if (!late_functions.empty()) {
+#if LLVM_VERSION_MAJOR >= 17
+        llvm::FunctionPassManager LateFPM;
+        LateFPM.addPass(llvm::SROAPass(llvm::SROAOptions(
+            llvm::SROAOptions::ModifyCFG)));
+        LateFPM.addPass(llvm::GVNPass());
+        LateFPM.addPass(llvm::InstCombinePass());
+        LateFPM.addPass(llvm::SimplifyCFGPass());
+        for (llvm::Function *f : rsqrt_changed) {
+            FAM.invalidate(*f, llvm::PreservedAnalyses::none());
+        }
+        for (llvm::Function *f : late_functions) {
+            LateFPM.run(*f, FAM);
+        }
+        // The functions changed outside of a module pass: drop the module
+        // analyses (and through them the function ones) computed before.
+        MAM.invalidate(m, llvm::PreservedAnalyses::none());
+#else
+        llvm::legacy::FunctionPassManager late(&m);
+        late.add(llvm::createTargetTransformInfoWrapperPass(
+            TM->getTargetIRAnalysis()));
+        late.add(llvm::createSROAPass());
+        late.add(llvm::createGVNPass());
+        late.add(llvm::createInstructionCombiningPass());
+        late.add(llvm::createCFGSimplificationPass());
+        late.doInitialization();
+        for (llvm::Function *f : late_functions) {
+            late.run(*f);
+        }
+        late.doFinalization();
+#endif
+    }
+
+    // The horizontal reduction pass matches the lane transpose the SLP
+    // vectorizer builds for a four-way sum of squares and rewrites it as
+    // pairwise horizontal additions. It only matches fast math instructions,
+    // so ordinary compilations keep their existing output.
+    bool reduced = false;
+    for (llvm::Function *f : late_functions) {
+        reduced |= recombine_horizontal_reductions(*f, *TM);
+    }
+    if (reduced) {
+        // Simplify and schedule the rewritten reductions. This is LLVM's
+        // module O1 pipeline, so it also revisits functions the matcher
+        // left unchanged.
+#if LLVM_VERSION_MAJOR >= 17
+        llvm::ModulePassManager Final
+            = PB.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O1);
+        Final.run(m, MAM);
+#else
+        llvm::legacy::PassManager final_mpm;
+        final_mpm.add(new llvm::TargetLibraryInfoWrapperPass(
+            TM->getTargetTriple()));
+        final_mpm.add(llvm::createTargetTransformInfoWrapperPass(
+            TM->getTargetIRAnalysis()));
+        llvm::legacy::FunctionPassManager final_fpm(&m);
+        final_fpm.add(llvm::createTargetTransformInfoWrapperPass(
+            TM->getTargetIRAnalysis()));
+        llvm::PassManagerBuilder final_builder;
+        final_builder.OptLevel = 1;
+        final_builder.SizeLevel = 0;
+        final_builder.Inliner = llvm::createFunctionInliningPass(1, 0, false);
+        final_builder.populateFunctionPassManager(final_fpm);
+        final_builder.populateModulePassManager(final_mpm);
+        final_fpm.doInitialization();
+        for (llvm::Function &func : m) {
+            final_fpm.run(func);
+        }
+        final_fpm.doFinalization();
+        final_mpm.run(m);
+#endif
+    }
 }
 
 std::string LLVMEvaluator::module_to_string(llvm::Module &m) {

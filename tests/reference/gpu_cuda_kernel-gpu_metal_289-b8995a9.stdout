@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-struct __ScalarArgs___lfortran_gpu_kernel_0 {
+struct __ScalarArgs___lfortran_gpu_kernel_0_13gpu_metal_28914run_resolvable {
     int nn;
     int __dim_r_0;
     int __lb_r_0;
@@ -8,9 +8,9 @@ struct __ScalarArgs___lfortran_gpu_kernel_0 {
     int __workspace_extent;
 };
 
-extern "C" __global__ void __lfortran_gpu_kernel_0(
+extern "C" __global__ void __launch_bounds__(256, 1) __lfortran_gpu_kernel_0_13gpu_metal_28914run_resolvable(
     float* __restrict__ r,
-    __ScalarArgs___lfortran_gpu_kernel_0 __scalar_args,
+    __ScalarArgs___lfortran_gpu_kernel_0_13gpu_metal_28914run_resolvable __scalar_args,
     float* __restrict__ __workspace_2)
 {
     int nn = __scalar_args.nn;
@@ -26,29 +26,24 @@ extern "C" __global__ void __lfortran_gpu_kernel_0(
     __flat_idx = ((blockIdx.x * blockDim.x) + threadIdx.x);
     i__dc = (__flat_idx + 1);
     {
-        int __do_loop_end;
-        int __do_loop_end1;
         int __gpu_sum_k;
         float __gpu_sum_res;
-        float* work = __workspace_2 + (blockIdx.x * blockDim.x + threadIdx.x) * __workspace_extent;
-        __do_loop_end = nn;
-        k = (1 - 1);
-        while (((k + 1) <= __do_loop_end)) {
-            k = (k + 1);
+        float* work = ((__workspace_extent) > 0) ? (__workspace_2 + ((long)(blockIdx.x * blockDim.x + threadIdx.x)) * __workspace_extent) : nullptr;
+        #pragma unroll 64
+        for (k = 1; k <= nn; k++) {
             work[((int)(k) - (1))] = ((float)(k * i__dc));
         }
         __gpu_sum_res =   0.00000000000000000e+00f;
-        __do_loop_end1 = __workspace_extent;
-        __gpu_sum_k = (1 - 1);
-        while (((__gpu_sum_k + 1) <= __do_loop_end1)) {
-            __gpu_sum_k = (__gpu_sum_k + 1);
+        const int __lfortran_end_0 = __workspace_extent;
+        #pragma unroll 16
+        for (__gpu_sum_k = 1; __gpu_sum_k <= __lfortran_end_0; __gpu_sum_k++) {
             __gpu_sum_res = (__gpu_sum_res + work[((int)((1 + (__gpu_sum_k - 1))) - (1))]);
         }
         r[((int)(i__dc) - (__lb_r_0))] = __gpu_sum_res;
     }
 }
 
-struct __ScalarArgs___lfortran_gpu_kernel_1 {
+struct __ScalarArgs___lfortran_gpu_kernel_1_13gpu_metal_28916run_unresolvable {
     int nn;
     int __dim_r_0;
     int __lb_r_0;
@@ -56,9 +51,9 @@ struct __ScalarArgs___lfortran_gpu_kernel_1 {
     int __workspace_extent;
 };
 
-extern "C" __global__ void __lfortran_gpu_kernel_1(
+extern "C" __global__ void __launch_bounds__(256) __lfortran_gpu_kernel_1_13gpu_metal_28916run_unresolvable(
     float* __restrict__ r,
-    __ScalarArgs___lfortran_gpu_kernel_1 __scalar_args,
+    __ScalarArgs___lfortran_gpu_kernel_1_13gpu_metal_28916run_unresolvable __scalar_args,
     float* __restrict__ __workspace_2)
 {
     int nn = __scalar_args.nn;
@@ -74,12 +69,9 @@ extern "C" __global__ void __lfortran_gpu_kernel_1(
     __flat_idx = ((blockIdx.x * blockDim.x) + threadIdx.x);
     i__dc = (__flat_idx + 1);
     {
-        int __do_loop_end;
-        float* work = __workspace_2 + (blockIdx.x * blockDim.x + threadIdx.x) * __workspace_extent;
-        __do_loop_end = (nn + i__dc);
-        k = (1 - 1);
-        while (((k + 1) <= __do_loop_end)) {
-            k = (k + 1);
+        float* work = ((__workspace_extent) > 0) ? (__workspace_2 + ((long)(blockIdx.x * blockDim.x + threadIdx.x)) * __workspace_extent) : nullptr;
+        #pragma unroll 16
+        for (k = 1; k <= (nn + i__dc); k++) {
             work[((int)(k) - (1))] = ((float)k);
         }
         r[((int)(i__dc) - (__lb_r_0))] = work[((int)((nn + i__dc)) - (1))];

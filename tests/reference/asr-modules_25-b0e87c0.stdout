@@ -175,6 +175,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 )
                                         })
                                     toml_character_tokenizer
@@ -214,6 +215,7 @@
                     ()
                     [tomlf_de_tokenizer_25]
                     .true.
+                    .false.
                     .false.
                     .false.
                     ()
@@ -331,6 +333,7 @@
                                     .false.
                                     .false.
                                     ()
+                                    (.true.)
                                 ),
                             parse_select:
                                 (Function
@@ -601,6 +604,7 @@
                                                     Source
                                                     .true.
                                                     .false.
+                                                    Public
                                                 )
                                         })
                                     toml_tokenizer
@@ -662,6 +666,7 @@
                     ()
                     []
                     .true.
+                    .false.
                     .false.
                     .false.
                     ()

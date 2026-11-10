@@ -45,9 +45,10 @@ Do not install dependencies with `apt`, `apt-get`, Homebrew, Conda, mamba,
 micromamba, pip, or other system/global installers. Do not substitute a host
 compiler or invoke standalone CMake, Ninja, build scripts, or test runners as
 an alternative to the Pixi tasks. Resolve missing project dependencies in
-`pixi.toml` and the selected Pixi environment. If Pixi or a required platform
-SDK is unavailable, report it rather than attempting another installation
-method. Git, Pixi, and the platform SDKs listed below are prerequisites.
+`pixi.toml` and the selected Pixi environment, pinning each package to an
+exact version (zlib and zstd excepted). If Pixi or a required platform SDK is
+unavailable, report it rather than attempting another installation method.
+Git, Pixi, and the platform SDKs listed below are prerequisites.
 
 This policy also applies when consulting older installation or CI recipes:
 `pixi.toml` and its tasks own agent setup. Read-only review and issue triage do
@@ -207,7 +208,8 @@ MCP tools; see "Git Remotes & Issues"), not a compiler build.
   supplies build/test dependencies and Linux C/C++ compilers. On macOS, install
   Xcode Command Line Tools; on Windows, use an initialized MSVC developer
   shell. Pixi supplies the cross-platform `shell` that runs the build scripts,
-  so Bash is not required. Use Pixi inside WSL for Unix-only test runners.
+  so Bash is not required; builds without Pixi fall back to Bash. Use Pixi
+  inside WSL for Unix-only test runners.
   If a prerequisite is missing, report it; do not provision an alternate toolchain.
 
 ## Build, Test, and Development Commands
@@ -377,9 +379,12 @@ only once, redirect to a log file and then examine the log file.
   Every full Quick suite runs with assertions and per-pass ASR verification.
   The LLVM 11 compiler is a Debug build compiled with `-O2` (assertions and
   verification stay on, no `NDEBUG`), which makes its four full passes ~1.6x
-  faster. The Linux LLVM 21 platform compiler is compiled with `-O2` the same
-  way (in `.github/actions/build-platform`, also for Exhaustive's copy); the
-  macOS, Windows and Linux LLVM 11 platform builds keep their defaults.
+  faster. The Linux LLVM 11 and LLVM 21 platform compilers are compiled with
+  `-O2` the same way (in `.github/actions/build-platform`, also for Exhaustive's
+  copies, cache key suffix `-o2`); the macOS and Windows platform builds keep
+  their defaults. Quick runs the full CUDA-on-CPU suite on Linux LLVM 21 only
+  and a smoke check on Linux LLVM 11 and macOS. Quick's macOS job runs the
+  Metal smoke check; Exhaustive's macOS platform job runs the full Metal suite.
   Both full-suite compilers also use the platform C/C++ diagnostic/hardening
   flags (including `-Werror`) and `WITH_INTERNAL_ALLOC_CHECK=yes`.
   These modes are not just smoke selections.

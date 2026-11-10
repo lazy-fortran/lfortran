@@ -1,8 +1,9 @@
 program string_37
-    character(5) :: string = 'hello'
-    character(:), pointer :: string2
+    character(5) :: string
+    character(:), pointer :: string2 
+    string = "abcde"
     print*, max(maybe(string), 'works')
-    if (max(maybe(string), 'works') /= 'works') error stop
+    if (max(maybe(string), 'works') /= 'works') error stop 
     string2 => cast_to_string()
     string = string2
     if (string /= "Hello") error stop
@@ -10,7 +11,7 @@ program string_37
     contains
 
     function maybe(string) result(maybe_string)
-        character(5), intent(in) :: string
+        character(5) :: string
         character(len=len(string)) :: maybe_string
         maybe_string = string
     end function maybe

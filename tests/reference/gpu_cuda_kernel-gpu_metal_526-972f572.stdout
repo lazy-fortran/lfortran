@@ -1,14 +1,14 @@
 #include <stdint.h>
 
-struct __ScalarArgs___lfortran_gpu_kernel_0 {
+struct __ScalarArgs___lfortran_gpu_kernel_0_13gpu_metal_526 {
     int n;
     int __loop_start_0;
     int __loop_end_0;
 };
 
-extern "C" __global__ void __lfortran_gpu_kernel_0(
+extern "C" __global__ void __launch_bounds__(256) __lfortran_gpu_kernel_0_13gpu_metal_526(
     int* __restrict__ b,
-    __ScalarArgs___lfortran_gpu_kernel_0 __scalar_args)
+    __ScalarArgs___lfortran_gpu_kernel_0_13gpu_metal_526 __scalar_args)
 {
     int n = __scalar_args.n;
     int __loop_start_0 = __scalar_args.__loop_start_0;
@@ -22,15 +22,15 @@ extern "C" __global__ void __lfortran_gpu_kernel_0(
     __flat_idx = ((blockIdx.x * blockDim.x) + threadIdx.x);
     i__dc = (__flat_idx + __loop_start_0);
     {
-        int __gpu_frame;
+        long __gpu_frame;
         int __gpu_frame_i__dc;
-        if ((i__dc < (1 + 1))) {
-            __gpu_frame = ((i__dc - ((1 + 1) - ((2 + (1 - 1)) / 1))) * 1);
-            if ((__gpu_frame < 2)) {
-                if ((__gpu_frame < 1)) {
-                    __gpu_frame_i__dc = (1 + __gpu_frame);
+        if ((((long)i__dc) < (((long)1) + ((long)1)))) {
+            __gpu_frame = ((((long)i__dc) - ((((long)1) + ((long)1)) - ((((long)2) + (((long)1) - ((long)1))) / ((long)1)))) * ((long)1));
+            if ((__gpu_frame < ((long)2))) {
+                if ((__gpu_frame < ((long)1))) {
+                    __gpu_frame_i__dc = ((int)(((long)1) + __gpu_frame));
                 } else {
-                    __gpu_frame_i__dc = (((n + 1) - 1) + (__gpu_frame - 1));
+                    __gpu_frame_i__dc = ((int)(((((long)n) + ((long)1)) - ((long)1)) + (__gpu_frame - ((long)1))));
                 }
                 if ((__gpu_frame_i__dc == 1)) {
                     m = (__gpu_frame_i__dc + 5);
@@ -55,14 +55,14 @@ extern "C" __global__ void __lfortran_gpu_kernel_0(
     }
 }
 
-struct __ScalarArgs___lfortran_gpu_kernel_1 {
+struct __ScalarArgs___lfortran_gpu_kernel_1_13gpu_metal_526 {
     int n;
     int __loop_end_0;
 };
 
-extern "C" __global__ void __lfortran_gpu_kernel_1(
+extern "C" __global__ void __launch_bounds__(256) __lfortran_gpu_kernel_1_13gpu_metal_526(
     int* __restrict__ b,
-    __ScalarArgs___lfortran_gpu_kernel_1 __scalar_args)
+    __ScalarArgs___lfortran_gpu_kernel_1_13gpu_metal_526 __scalar_args)
 {
     int n = __scalar_args.n;
     int __loop_end_0 = __scalar_args.__loop_end_0;
@@ -88,15 +88,15 @@ extern "C" __global__ void __lfortran_gpu_kernel_1(
     }
 }
 
-struct __ScalarArgs___lfortran_gpu_kernel_2 {
+struct __ScalarArgs___lfortran_gpu_kernel_2_13gpu_metal_526 {
     int n;
     int __loop_start_0;
     int __loop_end_0;
 };
 
-extern "C" __global__ void __lfortran_gpu_kernel_2(
+extern "C" __global__ void __launch_bounds__(256) __lfortran_gpu_kernel_2_13gpu_metal_526(
     int* __restrict__ c,
-    __ScalarArgs___lfortran_gpu_kernel_2 __scalar_args)
+    __ScalarArgs___lfortran_gpu_kernel_2_13gpu_metal_526 __scalar_args)
 {
     int n = __scalar_args.n;
     int __loop_start_0 = __scalar_args.__loop_start_0;
@@ -110,15 +110,15 @@ extern "C" __global__ void __lfortran_gpu_kernel_2(
     __flat_idx = ((blockIdx.x * blockDim.x) + threadIdx.x);
     i__dc1 = (__flat_idx + __loop_start_0);
     {
-        int __gpu_frame1;
+        long __gpu_frame1;
         int __gpu_frame_i__dc1;
-        if ((i__dc1 < (1 + 1))) {
-            __gpu_frame1 = ((i__dc1 - ((1 + 1) - ((1 + (1 - 1)) / 1))) * 1);
-            if ((__gpu_frame1 < 1)) {
-                if ((__gpu_frame1 < 1)) {
-                    __gpu_frame_i__dc1 = (1 + __gpu_frame1);
+        if ((((long)i__dc1) < (((long)1) + ((long)1)))) {
+            __gpu_frame1 = ((((long)i__dc1) - ((((long)1) + ((long)1)) - ((((long)1) + (((long)1) - ((long)1))) / ((long)1)))) * ((long)1));
+            if ((__gpu_frame1 < ((long)1))) {
+                if ((__gpu_frame1 < ((long)1))) {
+                    __gpu_frame_i__dc1 = ((int)(((long)1) + __gpu_frame1));
                 } else {
-                    __gpu_frame_i__dc1 = (((n + 1) - 0) + (__gpu_frame1 - 1));
+                    __gpu_frame_i__dc1 = ((int)(((((long)n) + ((long)1)) - ((long)0)) + (__gpu_frame1 - ((long)1))));
                 }
                 if ((__gpu_frame_i__dc1 == 1)) {
                     k = (__gpu_frame_i__dc1 + 50);
@@ -154,14 +154,14 @@ extern "C" __global__ void __lfortran_gpu_kernel_2(
     }
 }
 
-struct __ScalarArgs___lfortran_gpu_kernel_3 {
+struct __ScalarArgs___lfortran_gpu_kernel_3_13gpu_metal_526 {
     int n;
     int __loop_end_0;
 };
 
-extern "C" __global__ void __lfortran_gpu_kernel_3(
+extern "C" __global__ void __launch_bounds__(256) __lfortran_gpu_kernel_3_13gpu_metal_526(
     int* __restrict__ c,
-    __ScalarArgs___lfortran_gpu_kernel_3 __scalar_args)
+    __ScalarArgs___lfortran_gpu_kernel_3_13gpu_metal_526 __scalar_args)
 {
     int n = __scalar_args.n;
     int __loop_end_0 = __scalar_args.__loop_end_0;

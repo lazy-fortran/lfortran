@@ -46,6 +46,9 @@ set(SRC
     codegen/wasm_utils.cpp
 
     pass/nested_vars.cpp
+    pass/specialize_procedure_arguments.cpp
+    pass/procedure_argument_utils.cpp
+    pass/specialize_frame_arguments.cpp
     pass/array_struct_temporary.cpp
     pass/function_result_scope.cpp
     pass/where.cpp
@@ -58,7 +61,6 @@ set(SRC
     pass/parallel_canonicalize.cpp
     pass/parallel_dispatch.cpp
     pass/param_to_const.cpp
-    pass/do_loops.cpp
     pass/for_all.cpp
     pass/while_else.cpp
     pass/global_stmts.cpp
@@ -80,12 +82,10 @@ set(SRC
     pass/replace_symbolic.cpp
     pass/intrinsic_function.cpp
     pass/intrinsic_subroutine.cpp
-    pass/fma.cpp
-    pass/loop_vectorise.cpp
+    pass/loop_fusion.cpp
     pass/sign_from_value.cpp
     pass/inline_function_calls.cpp
     pass/scoped_inlining.cpp
-    pass/loop_unroll.cpp
     pass/dead_code_removal.cpp
     pass/instantiate_template.cpp
     pass/update_array_dim_intrinsic_calls.cpp
@@ -127,12 +127,18 @@ set(SRC
     pass/gpu_data_layout.cpp
     pass/device_launch_expand.cpp
     pass/gpu_launch_sync.cpp
+    pass/gpu_sequential_unroll.cpp
+    pass/gpu_residue_unroll.cpp
+    pass/gpu_integer_powers.cpp
+    pass/gpu_device_guard_fold.cpp
     pass/gpu_affine.cpp
+    pass/gpu_inline_loop_calls.cpp
     pass/gpu_loop_utils.cpp
     pass/gpu_loop_fusion.cpp
     pass/gpu_time_skew.cpp
     pass/gpu_index_set_split.cpp
     pass/gpu_array_statements.cpp
+    pass/gpu_call_guards.cpp
     pass/dead_array_store.cpp
     pass/gpu_vector_lanes.cpp
     pass/gpu_memory_space.cpp
@@ -161,6 +167,8 @@ if (WITH_LLVM)
         codegen/asr_to_llvm.cpp
         codegen/llvm_array_utils.cpp
         codegen/llvm_utils.cpp
+        codegen/llvm_rsqrt.cpp
+        codegen/llvm_reductions.cpp
     )
     if (WITH_MLIR)
         set(SRC ${SRC} codegen/asr_to_mlir.cpp)
@@ -174,6 +182,10 @@ if (WITH_LLVM)
         set_source_files_properties(codegen/llvm_array_utils.cpp PROPERTIES
             COMPILE_FLAGS -Wno-deprecated-declarations)
         set_source_files_properties(codegen/llvm_utils.cpp PROPERTIES
+            COMPILE_FLAGS -Wno-deprecated-declarations)
+        set_source_files_properties(codegen/llvm_rsqrt.cpp PROPERTIES
+            COMPILE_FLAGS -Wno-deprecated-declarations)
+        set_source_files_properties(codegen/llvm_reductions.cpp PROPERTIES
             COMPILE_FLAGS -Wno-deprecated-declarations)
         set_source_files_properties(stacktrace.cpp PROPERTIES
             COMPILE_FLAGS -Wno-deprecated-declarations)
@@ -235,11 +247,13 @@ install(
 )
 
 # Relative to runtime/. The CPU emulation of the CUDA runtime API (cuda_cpu/)
-# keeps its own directory, which holds its cuda_runtime.h.
+# and its HIP implementation (hip/) keep their own directories, each of which
+# holds its cuda_runtime.h.
 set(LFORTRAN_GPU_RUNTIME_SOURCES
     lfortran_gpu_metal.m
     lfortran_gpu_cuda.c
     lfortran_gpu_runtime.h
+    hip/cuda_runtime.h
     cuda_cpu/cuda_runtime.h
     cuda_cpu/cuda_cpu_runtime.c
     cuda_cpu/cuda_cpu_device.h

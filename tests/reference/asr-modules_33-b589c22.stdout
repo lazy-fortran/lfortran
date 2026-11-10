@@ -24,6 +24,7 @@
                     .false.
                     .false.
                     .false.
+                    .false.
                     ()
                 ),
             fpm_dependency_modules_33:
@@ -738,6 +739,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Private
                                                 ),
                                             add_project_dependencies:
                                                 (StructMethodDeclaration
@@ -749,6 +751,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Private
                                                 ),
                                             cache:
                                                 (Variable
@@ -921,6 +924,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Private
                                                 ),
                                             verbosity:
                                                 (Variable
@@ -1321,6 +1325,7 @@
                     .true.
                     .false.
                     .false.
+                    .false.
                     ()
                 ),
             fpm_model_modules_33:
@@ -1689,6 +1694,7 @@
                     ()
                     [fpm_dependency_modules_33]
                     .true.
+                    .false.
                     .false.
                     .false.
                     ()
@@ -2121,6 +2127,7 @@
                     [fpm_dependency_modules_33
                     fpm_model_modules_33]
                     .true.
+                    .false.
                     .false.
                     .false.
                     ()

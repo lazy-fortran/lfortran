@@ -1395,6 +1395,7 @@ class ExprStmtDuplicatorVisitor(ASDLVisitor):
             field.type == "array_index" or
             field.type == "array_extent_check" or
             field.type == "alloc_arg" or
+            field.type == "reduction_expr" or
             field.type == "case_stmt" or
             field.type == "type_stmt" or
             field.type == "rank_stmt" or
@@ -1408,6 +1409,7 @@ class ExprStmtDuplicatorVisitor(ASDLVisitor):
                     field.type != "array_index" and
                     field.type != "array_extent_check" and
                     field.type != "alloc_arg" and
+                    field.type != "reduction_expr" and
                     field.type != "dimension" and
                     field.type != "do_loop_head"):
                     pointer_char = '*'
@@ -1452,6 +1454,12 @@ class ExprStmtDuplicatorVisitor(ASDLVisitor):
                     self.emit("    }", level)
                     self.emit("    alloc_arg_copy.m_codims = codims_copy.p;", level)
                     self.emit("    m_%s.push_back(al, alloc_arg_copy);"%(field.name), level)
+                elif field.type == "reduction_expr":
+                    self.emit("    ASR::reduction_expr_t reduction_copy;", level)
+                    self.emit("    reduction_copy.loc = x->m_%s[i].loc;"%(field.name), level)
+                    self.emit("    reduction_copy.m_op = x->m_%s[i].m_op;"%(field.name), level)
+                    self.emit("    reduction_copy.m_arg = self().duplicate_expr(x->m_%s[i].m_arg);"%(field.name), level)
+                    self.emit("    m_%s.push_back(al, reduction_copy);"%(field.name), level)
                 elif field.type == "array_index":
                     self.emit("    ASR::array_index_t array_index_copy;", level)
                     self.emit("    array_index_copy.loc = x->m_%s[i].loc;"%(field.name), level)
@@ -2485,14 +2493,21 @@ class ASRTextSerializationVisitorVisitor(ASDLVisitor):
     def make_visitor(self, name, fields):
         serialized_fields = [field for field in fields if field.type != "location"]
         optional = [f for f in serialized_fields if f.opt and f.type in products]
+        # An absent optional product field is omitted only when every later
+        # one is absent too (written as nil otherwise), so that the reader
+        # can match a positional form that omits a trailing run of them.
+        written = {}
+        for i, field in enumerate(optional):
+            written[field.name] = "(%s)" % " || ".join(
+                "x.m_%s != nullptr" % f.name for f in optional[i:])
         field_count = str(len(serialized_fields) - len(optional))
         for field in optional:
-            field_count += " + (x.m_%s != nullptr)" % field.name
+            field_count += " + %s" % written[field.name]
         self.emit("void visit_%s(const %s_t &x) {" % (name, name), 1)
         self.emit('self().begin_form("%s", %s);' % (name, field_count), 2)
         for field in serialized_fields:
             if field in optional:
-                self.emit("if (x.m_%s) {" % field.name, 2)
+                self.emit("if %s {" % written[field.name], 2)
             self.emit('self().begin_field("%s");' % field.name, 2)
             self.visitField(field, name)
             if field in optional:

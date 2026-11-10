@@ -24,6 +24,7 @@
                     .true.
                     .false.
                     .false.
+                    .false.
                     ()
                 ),
             tomlf_structure_base:
@@ -107,6 +108,7 @@
                                     .false.
                                     .false.
                                     ()
+                                    (.true.)
                                 ),
                             toml_ordered:
                                 (Struct
@@ -150,6 +152,7 @@
                                                     Source
                                                     .true.
                                                     .false.
+                                                    Public
                                                 )
                                         })
                                     toml_structure
@@ -177,6 +180,7 @@
                     ()
                     [tomlf_type_value]
                     .true.
+                    .false.
                     .false.
                     .false.
                     ()
@@ -259,6 +263,7 @@
                     [tomlf_type_array
                     tomlf_structure_base
                     tomlf_type_value]
+                    .false.
                     .false.
                     .false.
                     .false.
@@ -593,6 +598,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             list:
                                                 (Variable
@@ -684,6 +690,7 @@
                     .true.
                     .false.
                     .false.
+                    .false.
                     ()
                 ),
             tomlf_type_value:
@@ -761,6 +768,7 @@
                                     .false.
                                     .false.
                                     ()
+                                    (.true.)
                                 ),
                             toml_value:
                                 (Struct
@@ -777,6 +785,7 @@
                                                     Source
                                                     .true.
                                                     .false.
+                                                    Public
                                                 ),
                                             key:
                                                 (Variable
@@ -834,6 +843,7 @@
                     ()
                     []
                     .true.
+                    .false.
                     .false.
                     .false.
                     ()

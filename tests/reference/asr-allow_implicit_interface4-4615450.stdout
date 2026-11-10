@@ -334,7 +334,32 @@
                                     (SymbolTable
                                         7
                                         {
-                                            
+                                            ~implicit_interface_f_7_return_var_name:
+                                                (Variable
+                                                    7
+                                                    ~implicit_interface_f_7_return_var_name
+                                                    []
+                                                    ReturnVar
+                                                    ()
+                                                    ()
+                                                    Default
+                                                    (Real 8)
+                                                    ()
+                                                    Source
+                                                    Public
+                                                    Required
+                                                    .false.
+                                                    .false.
+                                                    .false.
+                                                    ()
+                                                    .false.
+                                                    .false.
+                                                    .false.
+                                                    NotMethod
+                                                    ()
+                                                    []
+                                                    ()
+                                                )
                                         })
                                     ~implicit_interface_f_7
                                     (FunctionType
@@ -355,7 +380,7 @@
                                     []
                                     []
                                     []
-                                    ()
+                                    (Var 7 ~implicit_interface_f_7_return_var_name)
                                     Private
                                     .false.
                                     .false.
@@ -454,7 +479,7 @@
                             ()
                             [(FunctionCall
                                 2 f~fpcast_ptr
-                                ()
+                                2 f
                                 [((Var 2 hlgth))]
                                 (Real 8)
                                 ()
@@ -950,7 +975,7 @@
                             ()
                             [(FunctionCall
                                 3 c~fpcast_ptr
-                                ()
+                                3 c
                                 [((Var 3 d))]
                                 (Real 8)
                                 ()
@@ -1378,7 +1403,7 @@
                             ()
                             [(FunctionCall
                                 4 a~fpcast_ptr
-                                ()
+                                4 a
                                 [((Var 4 b))]
                                 (Real 8)
                                 ()

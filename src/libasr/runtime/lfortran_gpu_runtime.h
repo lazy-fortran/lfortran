@@ -85,6 +85,10 @@ typedef struct lfortran_gpu_kernel lfortran_gpu_kernel;
 // Elapsed time sums command-buffer intervals; busy time is their union, not
 // hardware occupancy. Copy counters exclude inline/scalar setBytes arguments.
 // Other backends return zeros, but snapshot_sync still synchronizes the runtime.
+// LFORTRAN_GPU_PROFILE=2 also times each kernel on the GPU, by committing every
+// launch in a command buffer of its own, which serializes the launches. With
+// either setting the runtime prints a report of the totals and of each kernel
+// at exit, to stderr or to the file LFORTRAN_GPU_PROFILE_FILE names.
 typedef struct lfortran_gpu_metal_telemetry {
     int gpu_timing_available;
     uint64_t completed_command_buffers;
@@ -145,15 +149,20 @@ static inline int lfortran_gpu_discard_allowed(int idx, void *const *ptrs,
 
 // The kernel sees the `size` bytes at `ptr` as they are when the launch is
 // made. A launch does not wait for the kernel: the host sees what the kernel
-// wrote at the next lfortran_gpu_sync.
+// wrote at the next lfortran_gpu_sync. A kernel handle may be launched again
+// without its arguments being set again, as the chunks of a launch that runs
+// in chunks are: a buffer the kernel only reads is then copied to the device
+// at the first of those launches only, so the host must not change it
+// between them; one set again is copied again.
 //
 // A runtime with memory of its own keeps a buffer the kernel may write on
 // the device: until the next sync, a later launch handed the same host range
 // sees what the kernel wrote there, without copying anything, and the host
 // gets it back at the sync. So between a launch and the next sync the host
 // must not read or write a range a kernel may write, nor free it except
-// after lfortran_gpu_discard; a range the kernel only reads it may change
-// or free as soon as the launch returns. This is what the compiler's
+// after lfortran_gpu_discard; a range the kernel only reads it may read,
+// but not change or free before the next lfortran_gpu_wait, since a runtime
+// may hand the kernel the host memory itself. This is what the compiler's
 // `gpu_launch_sync` pass arranges. A range handed over again that overlaps
 // a kept one without being the same range makes the runtime sync first.
 void lfortran_gpu_set_buffer_arg(lfortran_gpu_kernel* k, int idx,
@@ -182,10 +191,22 @@ void lfortran_gpu_launch(lfortran_gpu_ctx* ctx, lfortran_gpu_kernel* k,
 // into the host ranges they were handed. A kernel that failed ends the
 // program here.
 void lfortran_gpu_sync(lfortran_gpu_ctx* ctx);
+// Waits for every launch made so far that reads host memory in place,
+// without copying anything back: the host may then change or free what the
+// kernels only read. It returns at once when there is none.
+void lfortran_gpu_wait(lfortran_gpu_ctx* ctx);
 // The host is about to free the `size` bytes at `ptr`, and no longer needs
 // what a launch since the last sync wrote there: the runtime forgets the
-// range without copying anything back.
+// range without copying anything back. A pending launch that uses the range
+// in place is waited for first, so the compiler hands a local array that a
+// launch only reads here too, instead of waiting for every launch that
+// reads host memory in place (lfortran_gpu_wait).
 void lfortran_gpu_discard(lfortran_gpu_ctx* ctx, void* ptr, size_t size);
+// Called right before lfortran_gpu_sync or lfortran_gpu_wait: the host does
+// not change the `size` bytes at `ptr` from there until a launch reads them
+// or the next sync or wait, so a copy a launch since the last wait made of
+// them may still serve the launches after this one.
+void lfortran_gpu_keep(lfortran_gpu_ctx* ctx, void* ptr, size_t size);
 long long lfortran_gpu_heap_size(void);
 
 // The size in bytes of the device's last-level cache, which the loop

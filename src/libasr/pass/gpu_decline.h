@@ -57,6 +57,15 @@ struct GpuDeviceCapabilities {
     int max_integer_kind = 8;
     int max_real_kind = 8;
 
+    // The widest integer kind the device indexes in: the kind it numbers
+    // the iterations of a launch in, and so the widest loop index of an
+    // offloaded loop it takes, and the widest offset_kind below. This is
+    // about indexing, not values: a device may compute with integers wider
+    // than it indexes in, and a kernel narrows an integer(8) subscript to
+    // its offset kind only after the lower bound is subtracted
+    // (gpu_offset_term_parts).
+    int max_index_kind = 8;
+
     // Whether a device function may declare a local array whose extent is
     // only known once the kernel runs. Where it may not, such a local
     // becomes an argument that every caller gives the function, up to the
@@ -71,6 +80,29 @@ struct GpuDeviceCapabilities {
     // cheaply and see each other's writes after such a wait. One means an
     // iteration runs on one thread (see gpu_vector_lanes.cpp).
     int lanes_per_iteration = 1;
+    // A launch gets lanes only when it has at most this many iterations;
+    // with more, the iterations alone fill the GPU.
+    int64_t lanes_iterations_max = 1024;
+    // And a kernel whose lanes read along a column of an array that each
+    // iteration takes a column of (gpu_vector_lanes.cpp, `pays_at_any_size`)
+    // gets them up to this many: one lane per iteration would read 32
+    // columns at once there, and lanes read one.
+    int64_t lanes_column_iterations_max = 1024;
+    // The lanes a kernel of that second kind gets, when more than
+    // lanes_per_iteration: the whole block of threads (one iteration per
+    // block), which combine and wait for each other through shared memory.
+    // Zero keeps lanes_per_iteration.
+    int lanes_column_block = 0;
+    // Whether the lanes of an iteration can share a loop that accumulates
+    // into private scalars and combine what each lane accumulated
+    // (GpuLaneReduce).
+    bool lane_reductions = false;
+    // The widest integer or real kind of a value the lanes combine.
+    int lane_reduction_max_kind = 8;
+    // Whether the lanes of an iteration share loops whose iterations are
+    // independent (gpu_vector_lanes.cpp). Off where only reductions are
+    // shared out (NVIDIA GPUs, for now).
+    bool lane_independent_loops = true;
 
     int threads_per_block = 256;
 
@@ -84,10 +116,46 @@ struct GpuDeviceCapabilities {
     int tile_width = 0;
     int sequential_loop_unroll_factor = 1;
 
+    // The most threads a launch with a reduction runs (gpu_offload.cpp):
+    // each runs every reduction_threads-th iteration in a grid-stride loop
+    // and accumulates them in its own slot, so the host folds at most this
+    // many slots. On an MI300A a dot product of 2**27 elements reads at
+    // 3.6 TB/s with 2**17 threads, and the fold of their 1 MB of slots takes
+    // 0.1 ms.
+    int64_t reduction_threads = 131072;
+
+    // Whether the threads of a warp combine their accumulators of a
+    // reduction with shuffles (GpuLaneReduce), so that a launch with a
+    // reduction has one slot per warp instead of one per thread. The host
+    // then folds a 32nd of the slots, and a launch can run many more
+    // threads than the host could fold the slots of.
+    bool reduction_warp_slots = false;
+
+    // Whether a launch of more iterations than the chunk limit
+    // (PassOptions::gpu_chunk_limit) runs its kernel once per chunk of the
+    // iteration space (device_launch_expand.cpp). Where it does not, one
+    // launch runs every iteration.
+    bool chunked_launches = false;
+
     // How many bytes of stack a thread of a kernel has. Late kernel storage
     // placement spills private arrays that do not fit to per-thread slices
     // of global workspace buffers; it never changes their locality.
     int64_t thread_stack_bytes = 0;
+
+    // The integer kind a kernel computes the offset of an element in an
+    // array in. Like the host's array descriptors, the offsets are 64-bit
+    // only with --descriptor-index-64, and only on a device that indexes in
+    // 64 bits (offsets_follow_descriptor_index_64); otherwise a launch stops
+    // before it hands a kernel an array of more than huge(0) elements.
+    int offset_kind = 4;
+
+    // Whether --descriptor-index-64 makes offset_kind 8: whether the device
+    // indexes in 64 bits (max_index_kind). Where it does not, the flag does
+    // not help an array of more than huge(0) elements, and a diagnostic
+    // must not suggest it.
+    bool offsets_follow_descriptor_index_64() const {
+        return max_index_kind >= 8;
+    }
 
     // Whether the device has a scalar type of the same in-memory width as
     // `t`. Every dialect shares a floor -- the widths in
@@ -135,6 +203,9 @@ enum class GpuDeclineReason {
     ReductionClause,
     LoopWithoutIndex,
     IncompleteLoopHead,
+    // A loop index of an integer kind wider than the device numbers the
+    // iterations of a launch in (GpuDeviceCapabilities::max_index_kind).
+    LoopIndexKind,
     StridedLoop,
 
     // --- what the pass's own lowering cannot yet do to the body ---

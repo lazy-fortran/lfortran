@@ -126,7 +126,7 @@
                                     (StructType
                                         []
                                         []
-                                        .false.
+                                        .true.
                                         .true.
                                     )
                                     []
@@ -146,6 +146,7 @@
                     fortuno_types
                     ()
                     []
+                    .false.
                     .false.
                     .false.
                     .false.

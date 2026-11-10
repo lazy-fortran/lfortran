@@ -266,7 +266,7 @@
                                             (Integer 4)
                                             ()
                                         )
-                                        ())
+                                        (IntegerConstant 1 (Integer 4) Decimal))
                                         [(If
                                             ()
                                             (IntrinsicImpureFunction
@@ -1005,6 +1005,7 @@
                     .false.
                     .false.
                     .false.
+                    .false.
                     ()
                 ),
             tomlf_type_keyval:
@@ -1177,6 +1178,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             raw:
                                                 (Variable
@@ -1243,6 +1245,7 @@
                     tomlf_type_keyval
                     ()
                     [tomlf_type_value]
+                    .false.
                     .false.
                     .false.
                     .false.
@@ -1323,6 +1326,7 @@
                                     .false.
                                     .false.
                                     ()
+                                    (.true.)
                                 ),
                             match_key:
                                 (Function
@@ -1524,6 +1528,7 @@
                                                     Source
                                                     .true.
                                                     .false.
+                                                    Public
                                                 ),
                                             key:
                                                 (Variable
@@ -1563,6 +1568,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 )
                                         })
                                     toml_value
@@ -1591,6 +1597,7 @@
                     tomlf_type_value
                     ()
                     []
+                    .false.
                     .false.
                     .false.
                     .false.

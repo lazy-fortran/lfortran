@@ -188,6 +188,7 @@
                                                     Source
                                                     .false.
                                                     .true.
+                                                    Public
                                                 )
                                         })
                                     test_type
@@ -214,6 +215,7 @@
                     test_module
                     ()
                     []
+                    .false.
                     .false.
                     .false.
                     .false.

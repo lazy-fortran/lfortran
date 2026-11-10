@@ -1,4 +1,5 @@
 #include <cctype>
+#include <limits>
 
 #include <libasr/asr_utils.h>
 #include <libasr/codegen/gpu_utils.h>
@@ -35,16 +36,27 @@ GpuDeviceCapabilities gpu_device_capabilities(GpuDevice device) {
         case GpuDevice::Metal:
             caps.name = "Metal";
             // The Metal Shading Language has `float`, `half` and `bfloat`
-            // but no 64-bit floating point type, and the emitter has no
-            // 64-bit integer of its own either.
-            caps.max_integer_kind = 4;
+            // but no 64-bit floating point type. Its `long` is a 64-bit
+            // integer, so integer(8) values are computed in their own width.
             caps.max_real_kind = 4;
+            // Metal kernels number their iterations, and compute element
+            // offsets, in 32 bits; 64-bit indexing is a separate design
+            // (#16569, #16578). An integer(8) loop index is not taken yet.
+            caps.max_index_kind = 4;
             // Metal shaders have neither variable-length arrays nor a heap,
             // so a device function cannot declare a local whose extent is
             // only known once the kernel runs.
             caps.device_function_runtime_sized_locals = false;
             // Every Apple GPU runs SIMD-groups of 32 threads.
             caps.lanes_per_iteration = 32;
+            // The lanes of an iteration are a whole SIMD-group, whose
+            // `simd_sum`, `simd_product`, `simd_min` and `simd_max` combine
+            // 32-bit integers and floats.
+            caps.lane_reductions = true;
+            caps.lane_reduction_max_kind = 4;
+            // As many as the 32-bit thread index of a kernel numbers.
+            caps.lanes_column_iterations_max =
+                std::numeric_limits<int32_t>::max() / 32;
             caps.threads_per_block = 64;
             caps.sequential_loop_unroll_factor = 16;
             // A kernel is compiled for the GPU that runs it, so this is the
@@ -55,6 +67,10 @@ GpuDeviceCapabilities gpu_device_capabilities(GpuDevice device) {
             // a macOS virtual machine 64 KiB (65,472 bytes build, 65,520 are
             // rejected with "Compilation failed").
             caps.thread_stack_bytes = 64 * 1024;
+            // A launch of more than huge(0) iterations, which a nest of
+            // integer(4) loops can have, runs in chunks the kernel numbers
+            // in 32 bits.
+            caps.chunked_launches = true;
             break;
         case GpuDevice::Cuda:
             caps.name = "CUDA";
@@ -73,6 +89,7 @@ GpuDeviceCapabilities gpu_device_capabilities(GpuDevice device) {
             // A warp: one warp loads one contiguous 128-byte line of a
             // `float` array, and a block of 256 threads covers 8 of them.
             caps.tile_width = 32;
+            caps.chunked_launches = true;
             break;
         case GpuDevice::None:
             break;
@@ -81,7 +98,54 @@ GpuDeviceCapabilities gpu_device_capabilities(GpuDevice device) {
 }
 
 GpuDeviceCapabilities gpu_device_capabilities(const PassOptions &pass_options) {
-    return gpu_device_capabilities(gpu_device_selected(pass_options));
+    GpuDeviceCapabilities caps = gpu_device_capabilities(
+        gpu_device_selected(pass_options));
+    if (caps.device == GpuDevice::Cuda && pass_options.gpu_cuda_warps) {
+        // A warp of 32 threads runs the lanes of an iteration; neither the
+        // CPU emulation (which runs the threads of a block one after
+        // another) nor HIP (64-wide wavefronts) has them yet. An H100 keeps
+        // about 230,000 threads resident, so a launch of up to 65,536
+        // iterations of 32 lanes each still fits it a few times over.
+        caps.lanes_per_iteration = 32;
+        caps.lanes_iterations_max = 65536;
+        // Lanes that read one column together: 32 of them read 256 bytes of
+        // it at a time, and a whole block 2 KB, which keeps the memory
+        // channels of an H200 busier (a column sum over 12,288 columns of
+        // 12,288 `real(8)` reads 3.2 TB/s with a warp per column and
+        // 4.4 TB/s with a block).
+        // The block combines the sums of its lanes in a different order than
+        // a warp does, which only --fast permits.
+        if (pass_options.fast) {
+            caps.lanes_column_block = caps.threads_per_block;
+        }
+        caps.lane_reductions = true;
+        caps.lane_independent_loops = false;
+        caps.reduction_warp_slots = true;
+    }
+    if (pass_options.descriptor_index_64
+            && caps.offsets_follow_descriptor_index_64()) {
+        caps.offset_kind = 8;
+    }
+    if (caps.device == GpuDevice::Cuda && !pass_options.gpu_offload_hip) {
+        // The host folds one slot per thread, so on an H100 PCIe a dot
+        // product of 2**27 elements read at 1.63 TB/s with 2**16 threads
+        // and at 1.22 TB/s with 2**17; a 2-norm and a maximum lost 40% with
+        // 2**17. Where the threads of a warp share a slot the host folds a
+        // 32nd of them, and the threads should be as many as the GPU keeps
+        // resident: an H200 reads a 2-norm of 2**27 elements at 4.0 TB/s with
+        // 2**18 threads, at 3.5 TB/s with 2**17, and at 1.6 TB/s with 2**16,
+        // where the kernel's strides collide in the memory channels.
+        caps.reduction_threads = caps.reduction_warp_slots ? 262144 : 65536;
+    }
+    if (pass_options.gpu_offload_hip) {
+        // ROCm's device compiler does not unroll a loop whose trip count it
+        // does not know, so a thread waits for each load of such a loop
+        // before it issues the next. Four at a time made a matrix-vector
+        // product (a thread per row, a loop over the columns) 3x faster on
+        // an MI300A, and n-body 18%; eight made other kernels slower.
+        caps.sequential_loop_unroll_factor = 4;
+    }
+    return caps;
 }
 
 bool GpuDeviceCapabilities::has_scalar_type(ASR::ttype_t *t) const {
@@ -161,6 +225,9 @@ std::string gpu_decline_message(const GpuDecline &decline) {
             return "the loop has no index";
         case GpuDeclineReason::IncompleteLoopHead:
             return "the loop head is incomplete";
+        case GpuDeclineReason::LoopIndexKind:
+            return "the loop index is " + type_name + ", but the gpu "
+                "numbers the iterations of a loop in a narrower integer";
         case GpuDeclineReason::StridedLoop:
             return "the loop has a stride the gpu index arithmetic "
                 "cannot express";

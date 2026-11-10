@@ -411,6 +411,7 @@ def module(symtab_id, name, symbols, dependencies=(), parent_module=None,
         f":dependencies [{names}] :loaded_from_mod false "
         f":intrinsic false "
         f":has_submodules {'true' if has_submodules else 'false'} "
+        f":host_only_object false "
         f":global_init nil)"
     )
 
@@ -458,7 +459,7 @@ def struct_method(table, name, proc, proc_name=None, deferred=False,
         f":name {string(name)} :self_argument nil "
         f":proc_name {string(proc_name or name)} :proc {proc} "
         f":abi :Source :is_deferred {'true' if deferred else 'false'} "
-        f":is_nopass {'true' if nopass else 'false'})"
+        f":is_nopass {'true' if nopass else 'false'} :access :Public)"
     )
 
 

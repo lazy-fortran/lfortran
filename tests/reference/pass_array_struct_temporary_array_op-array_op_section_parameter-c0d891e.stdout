@@ -381,7 +381,7 @@
                                             UBound
                                             (IntegerConstant 4 (Integer 4) Decimal)
                                         )
-                                        ())
+                                        (IntegerConstant 1 (Integer 4) Decimal))
                                         [(Assignment
                                             (ArrayItem
                                                 (Var 3 a)
@@ -439,6 +439,7 @@
                     array_op_section_parameter_m
                     ()
                     []
+                    .false.
                     .false.
                     .false.
                     .false.

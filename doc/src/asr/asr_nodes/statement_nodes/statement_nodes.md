@@ -13,6 +13,7 @@ Assign
 Assignment
 Associate
 AssociateBlockCall
+BindReference
 BlockCall
 ChangeTeam
 CPtrToPointer
@@ -41,9 +42,11 @@ FormTeam
 GoTo
 GoToTarget
 GpuDiscard
+GpuKeep
 GpuKernelLaunch
 GpuLaneBarrier
 GpuSync
+GpuWait
 If
 IfArithmetic
 ImplicitDeallocate

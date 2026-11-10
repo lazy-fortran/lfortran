@@ -180,7 +180,7 @@
                                     (StructType
                                         []
                                         []
-                                        .false.
+                                        .true.
                                         .true.
                                     )
                                     []
@@ -566,6 +566,7 @@
                     allocate_on_assignment_03_m
                     ()
                     []
+                    .false.
                     .false.
                     .false.
                     .false.

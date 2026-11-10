@@ -19,6 +19,7 @@
                     :abi :Source
                     :is_deferred false
                     :is_nopass false
+                    :access :Public
                   )
                   "r" (Variable
                     :parent_symtab 2
@@ -57,7 +58,7 @@
                   )
                 ]
                 :member_function_types []
-                :is_cstruct false
+                :is_cstruct true
                 :is_unlimited_polymorphic false
               )
               :dependencies []
@@ -217,6 +218,7 @@
         :loaded_from_mod false
         :intrinsic false
         :has_submodules false
+        :host_only_object false
         :global_init nil
       )
       "main" (Program

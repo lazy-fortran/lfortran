@@ -1563,6 +1563,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             year:
                                                 (Variable
@@ -1713,6 +1714,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             ~assign:
                                                 (CustomOperator
@@ -1889,6 +1891,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             zone:
                                                 (Variable
@@ -1969,6 +1972,7 @@
                     tomlf_datetime
                     ()
                     [tomlf_datetime]
+                    .false.
                     .false.
                     .false.
                     .false.

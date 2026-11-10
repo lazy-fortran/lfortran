@@ -31,6 +31,11 @@ if (NOT XEUS_LFORTRAN_WASM_BUILD)
     if (NOT WIN32 AND NOT EMSCRIPTEN)
         ADDTESTC(test_system_clock lfortran_runtime_static)
     endif()
+    # Windows opens formatted files in text mode, which translates the
+    # record terminators this test counts.
+    if (NOT WIN32 AND NOT EMSCRIPTEN)
+        ADDTESTC(test_runtime_inquire_pos lfortran_runtime_static)
+    endif()
     # Needs a 64-bit file offset type; seeks past 2**31 without writing data.
     if (NOT EMSCRIPTEN AND (WIN32 OR CMAKE_SIZEOF_VOID_P EQUAL 8))
         ADDTESTC(test_file_seek lfortran_runtime_static)
@@ -61,6 +66,7 @@ set(SRC
     test_asr_text.cpp
     test_asr_text_parser.cpp
     test_gpu.cpp
+    test_c_cpp.cpp
     ../../bin/cuda_link_helpers.cpp
     ../../tests/test_cuda_link_helpers.cpp
     ../../bin/lfortran_command_line_parser.cpp
@@ -79,6 +85,16 @@ if (WITH_LLVM)
 endif()
 
 if (WITH_LSP)
+    add_executable(test_lsp_union_copy test_lsp_union_copy.cpp)
+    target_link_libraries(test_lsp_union_copy llanguage_server)
+    add_test(NAME test_lsp_union_copy COMMAND test_lsp_union_copy)
+    add_executable(test_server_queue test_server_queue.cpp)
+    target_link_libraries(test_server_queue llanguage_server)
+    if (NOT EMSCRIPTEN)
+        # std::thread needs an explicit libpthread with glibc < 2.34.
+        target_link_libraries(test_server_queue Threads::Threads)
+    endif()
+    add_test(NAME test_server_queue COMMAND test_server_queue)
     set(SRC_AST ${SRC_AST}
         test_ast.cpp
     )
@@ -413,4 +429,7 @@ if (APPLE)
     add_test(NAME test_gpu_metal_runtime
         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_gpu_metal_runtime.sh)
     set_tests_properties(test_gpu_metal_runtime PROPERTIES TIMEOUT 180)
+    add_test(NAME test_gpu_metal_memory
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_gpu_metal_memory.sh)
+    set_tests_properties(test_gpu_metal_memory PROPERTIES TIMEOUT 180)
 endif()

@@ -29,7 +29,23 @@ void ASRToGpuCVisitor<D>::emit_kernel_signature(const ASR::Function_t &kernel) {
         }
         src << "};\n\n";
     }
-    src << dialect.kernel_qualifier() << name << "(\n";
+    bool streams_rows = streams_strided_rows(kernel);
+    // A launch over one loop (a row of a matrix per thread) has few threads
+    // to hide the loads; one over two or more has plenty, and the registers
+    // of a deep unroll cost it more (a 4096 x 4096 matrix product loses 40%
+    // at 64).
+    size_t loop_dimensions = 0;
+    for (size_t i = 0; i < layout.n_scalars; i++) {
+        if (gpu_argument_name(layout.m_scalars[i], layout).rfind(
+                "__loop_end_", 0) == 0) {
+            loop_dimensions++;
+        }
+    }
+    kernel_streams_strided_rows = streams_rows && loop_dimensions <= 1;
+    src << dialect.kernel_qualifier(
+            gpu_device_capabilities(co.po).threads_per_block,
+            streams_rows)
+        << name << "(\n";
     kernel_params.clear();
     int slot = 0;
     bool previous = false;
@@ -143,24 +159,6 @@ void ASRToGpuCVisitor<D>::bind_kernel_arguments(const ASR::Function_t &kernel) {
                 register_array_extents(name, var->m_type);
             }
             continue;
-        }
-        ASR::Struct_t *st = get_struct_decl(var);
-        if (!st) continue;
-        for (auto &component : gpu_decomposed_components(st)) {
-            std::string member = component.name();
-            std::string key = name + "." + member;
-            func_array_size_params[key] = GpuNames::member_size(name, member);
-            func_array_data_params[key] = GpuNames::member_data(name, member);
-            if (component.rank > 1) {
-                for (size_t d = 0; d < component.rank; d++) {
-                    func_array_size_params[dim_size_key(key, d)] =
-                        struct_member_dim_param(name, member, d);
-                }
-            }
-            for (size_t d = 0; d < component.rank; d++) {
-                func_array_lb_params[dim_size_key(key, d)] =
-                    GpuNames::member_lower_bound(name, member, d);
-            }
         }
     }
     for (size_t i = 0; i < layout.n_scalars; i++) {

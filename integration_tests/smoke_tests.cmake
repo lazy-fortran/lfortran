@@ -11,6 +11,7 @@ set(LFORTRAN_SMOKE_TESTS
     system_clock_02
     abs_01 complex_01 complex_02 complex_03 complex_07
     enum_01 enum_02 enum_07
+    real80_literal_01 real80_print_01
 
     # Arrays: descriptors, sections, bounds, constructors and reductions.
     arrays_01 arrays_01_size arrays_02_size arrays_03_size
@@ -46,7 +47,7 @@ set(LFORTRAN_SMOKE_TESTS
     interface_01 interface_02 interface_03
     procedure_pointer_array_01 procedure_pointer_12
     bindc_01 bindc_02 bindc_03 bindc_04 bindc_05 bindc_08
-    bindc_06 bindc_07 complex_cloc_01
+    bindc_06 bindc_07 complex_cloc_01 test_c_long_double_02
     bindc_iso_fb_01 bindc_iso_fb_02 bindc_iso_fb_03
     c_f_pointer_01 c_f_pointer_02 c_f_proc_ptr_01
     separate_compilation_07 separate_compilation_09
@@ -77,7 +78,11 @@ set(LFORTRAN_SMOKE_TESTS
     fixed_form_select_case_01 fixed_form_comment_01 fixed_form_module_01
 
     # Small option-specific backends, legacy interfaces and runtime library.
+    # GPU capability check for the Metal and CUDA-on-CPU smoke jobs. The full
+    # suites stay on Linux LLVM 21 (CUDA-on-CPU) and Exhaustive's macOS job.
     minpack_01 simd_01 simd_02 do_concurrent_01
+    gpu_metal_01 gpu_metal_02 gpu_metal_03
+    gpu_scalar_reduction_actual_01
     implicit_interface_01 implicit_interface_02 implicit_interface_03
     implicit_interface_04 implicit_interface_05 implicit_interface_06
     implicit_interface_07 implicit_interface_08 implicit_interface_09

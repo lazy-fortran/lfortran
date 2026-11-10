@@ -18,10 +18,17 @@ struct MetalDialect {
 
     // Metal has no double precision. This silently narrows real(8), and is
     // only correct because pass_replace_gpu_offload refuses to offload a loop
-    // that touches real(8) or integer(8) and reports it instead. Do not lift
-    // that guard without also giving real(8) a correct lowering here.
+    // that touches real(8) and reports it instead. Do not lift that guard
+    // without also giving real(8) a correct lowering here.
     std::string real_type(int /*kind*/) const {
         return "float";
+    }
+
+    // The integer kind an element's offset in an array is computed in.
+    // Metal indexes in 32 bits (GpuDeviceCapabilities::max_index_kind); an
+    // integer(8) subscript is narrowed once its lower bound is subtracted.
+    int offset_kind() const {
+        return 4;
     }
 
     void emit_prologue(std::stringstream &src) const {
@@ -33,7 +40,8 @@ struct MetalDialect {
         return "inline ";
     }
 
-    std::string kernel_qualifier() const {
+    std::string kernel_qualifier(int64_t /*threads_per_block*/,
+            bool /*few_blocks*/) const {
         return "kernel void ";
     }
 
@@ -76,6 +84,22 @@ struct MetalDialect {
     }
 
     std::string lane_index() const { return "__gpu_lane"; }
+    // The prologue renames the grid position, so a kernel with lanes reads
+    // it under its usual name.
+    std::string lane_thread_index() const { return thread_index(); }
+    std::string lane_block_size() const { return block_size(); }
+    // What the lanes of the iteration hold, combined, in every lane. It is
+    // only reached with more than one lane (gpu_vector_lanes.cpp), and
+    // then the lanes are the whole SIMD-group (emit_lane_prologue): 0 adds,
+    // 1 multiplies, 2 takes the smallest, 3 the largest.
+    std::string lane_reduce(const std::string &value, int op,
+            bool /*has_lanes*/) const {
+        static const char *names[] = {"simd_sum", "simd_product", "simd_min",
+            "simd_max"};
+        LCOMPILERS_ASSERT(op >= 0 && op < 4);
+        return std::string(names[op]) + "(" + value + ")";
+    }
+    std::string lane_reduce_helper() const { return ""; }
 
     // The value in the first lane of the iteration. With one lane per
     // iteration, that is the thread's own.
@@ -91,6 +115,9 @@ struct MetalDialect {
         src << indent << "if (" << lanes << " > 1) simdgroup_barrier("
             "mem_flags::mem_device | mem_flags::mem_threadgroup);\n";
     }
+
+    // Metal's short loops are unrolled in the ASR (gpu_sequential_unroll).
+    std::string unroll_pragma(bool /*deep*/ = false) const { return ""; }
 
     // Every real is single precision, so a literal needs no suffix to say
     // which precision it is.
@@ -108,6 +135,12 @@ struct MetalDialect {
 
     std::string uint_type() const {
         return "uint";
+    }
+
+    // The bits of `value` read as a `type` of the same width.
+    std::string bit_cast(const std::string &type, bool /*to_real*/,
+            int /*kind*/, const std::string &value) const {
+        return "as_type<" + type + ">(" + value + ")";
     }
 
     // A relaxed atomic add to an `int` in device memory, giving the old value.

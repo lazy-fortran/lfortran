@@ -146,6 +146,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             print:
                                                 (StructMethodDeclaration
@@ -157,6 +158,7 @@
                                                     Source
                                                     .false.
                                                     .false.
+                                                    Public
                                                 ),
                                             radius:
                                                 (Variable
@@ -533,6 +535,7 @@
                     class_circle1
                     ()
                     [class_circle1]
+                    .false.
                     .false.
                     .false.
                     .false.
