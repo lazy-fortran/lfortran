@@ -1,0 +1,38 @@
+#!/bin/sh
+# Fortyard landing check of this fork: upstream's own developer workflow
+# (pixi run -e llvm11 build, tests, integration_tests), incrementally. The
+# runner keeps the work tree's build/ and its TMPDIR between checks, so the
+# pixi environments, the solved lock file, the build tree and sccache
+# persist. The reference tests run in full and the integration tests in
+# upstream's smoke selection, as in its Quick checks; the full suites and
+# the platform matrix run in GitHub Actions after each push to main.
+set -eu
+jobs=${FY_CHECK_JOBS:-8}
+state=${TMPDIR:-/tmp}/lfortran-check
+pixi_version=0.83.0
+mkdir -p "$state/bin"
+if [ "$("$state/bin/pixi" --version 2>/dev/null)" != "pixi $pixi_version" ]; then
+    curl -fsSL "https://github.com/prefix-dev/pixi/releases/download/v$pixi_version/pixi-x86_64-unknown-linux-musl.tar.gz" |
+        tar -xz -C "$state/bin" pixi
+fi
+export PATH="$state/bin:$PATH" PIXI_HOME="$state/pixi-home" PIXI_CACHE_DIR="$state/pixi-cache"
+export SCCACHE_DIR="$state/sccache" SCCACHE_CACHE_SIZE=20G
+# Environments live outside the work tree, which the runner cleans.
+pixi config set --global detached-environments "$state/pixi-envs" >/dev/null
+# pixi.lock is not tracked upstream; the solve is reused while pixi.toml is
+# unchanged.
+key=$(sha256sum pixi.toml | cut -c1-16)
+[ -f "$state/pixi.lock.$key" ] && cp "$state/pixi.lock.$key" pixi.lock
+run() {
+    log=$state/$1.log
+    shift
+    "$@" > "$log" 2>&1 || { tail -40 "$log"; exit 1; }
+}
+run build pixi run -e llvm11 build \
+    -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+cp pixi.lock "$state/pixi.lock.$key"
+echo "build passed"
+run tests pixi run -e llvm11 tests -j "$jobs"
+echo "reference tests passed"
+run integration pixi run -e llvm11 integration_tests -b llvm --smoke -j "$jobs"
+echo "integration tests (LLVM, smoke selection) passed"
