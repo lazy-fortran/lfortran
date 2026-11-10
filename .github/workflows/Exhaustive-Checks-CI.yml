@@ -10,8 +10,6 @@ on:
   # PR, dispatch this workflow on the PR branch in a fork (see
   # doc/src/installation.md).
   workflow_dispatch:
-  # The fork's merge queue runs it before every landing.
-  merge_group:
 
 # Main pushes share one group: a running main run is never cancelled, and a
 # newer push replaces the pending one, so the latest main is always tested.
@@ -23,10 +21,6 @@ concurrency:
 
 env:
   MACOSX_DEPLOYMENT_TARGET: 15.0
-  # OpenMPI's UCX transport fails on the network devices of the hosted
-  # runners ("failed to create UCP worker"); shared memory and TCP suffice.
-  OMPI_MCA_pml: "^ucx"
-  OMPI_MCA_osc: "^ucx"
 
 jobs:
   compatibility:
@@ -44,8 +38,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The fork's merge queue leaves macOS out (see Quick checks).
-        include: ${{ fromJSON(github.event_name == 'merge_group' && '[{"os":"ubuntu-latest","llvm-version":"11"},{"os":"ubuntu-latest","llvm-version":"21"}]' || '[{"os":"macos-latest","llvm-version":"11"},{"os":"ubuntu-latest","llvm-version":"11"},{"os":"ubuntu-latest","llvm-version":"21"}]') }}
+        include:
+          - os: macos-latest
+            llvm-version: "11"
+          - os: ubuntu-latest
+            llvm-version: "11"
+          - os: ubuntu-latest
+            llvm-version: "21"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -314,7 +313,6 @@ jobs:
 
   upload_tarball:
     name: Upload Tarball
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -344,7 +342,6 @@ jobs:
 
   upload_docs:
     name: Documentation
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -400,7 +397,6 @@ jobs:
           SSH_PRIVATE_KEY_DOCS: ${{ secrets.SSH_PRIVATE_KEY_DOCS }}
 
   build-and-push-image:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -487,18 +483,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
-
-  # The fork lands changes through a merge queue, whose required checks are
-  # these gates. A job skipped for the event counts as passed.
-  exhaustive_checks_gate:
-    name: Exhaustive checks gate
-    runs-on: ubuntu-latest
-    needs: [compatibility, platform, debug_outOfSource, release, build_xlfortran_jupyterlite]
-    if: always()
-    steps:
-      - name: Check required jobs
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          echo "$NEEDS_JSON"
-          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS_JSON"
