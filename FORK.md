@@ -19,6 +19,11 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
   offer upstream"; each is one squashed commit here, so it cherry-picks
   cleanly.
 
+## Style
+
+The Fortran code follows upstream's style, so `.fortyard/format-exclude`
+exempts it from fortyard's `fo fmt` check.
+
 ## The check
 
 `.fortyard/check` runs upstream's own developer workflow on a fortyard
@@ -33,10 +38,11 @@ minutes. GitHub Actions run upstream's full workflows after each push to
 1. On a branch from `main`, `git merge --no-ff <upstream commit>`. Take
    upstream's version of files the fork does not change on purpose,
    including `.github/workflows`.
-2. Check the merge locally (`pixi run -e llvm11 build`, `tests`) or by
-   pushing the branch to fortyard.
-3. An administrator pushes the merge commit to `main` on fortyard: landing
-   would squash it, which would make every later upstream merge conflict.
+2. Check the merge locally (`pixi run -e llvm11 build`, `tests`).
+3. Land the branch (`fy land lfortran BRANCH`). A branch that is `main` plus
+   one merge commit lands as that merge, so upstream's history stays an
+   ancestor of `main` and later merges stay small. If `main` moved in the
+   meantime, fortyard refuses it; merge again on the current `main`.
 
 ## Local commits
 
