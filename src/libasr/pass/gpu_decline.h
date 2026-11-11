@@ -93,6 +93,15 @@ struct GpuDeviceCapabilities {
     // block), which combine and wait for each other through shared memory.
     // Zero keeps lanes_per_iteration.
     int lanes_column_block = 0;
+    // A launch of at most `lanes_block_iterations_max` iterations gives
+    // each the lanes of a whole block, `lanes_block` of them, where the
+    // device combines their values across SIMD-groups; zero or one means
+    // an iteration never has more lanes than lanes_per_iteration. A
+    // launch of so few iterations leaves most of the GPU idle even with
+    // 32 lanes, and the lanes then sit in different warps whose results
+    // meet in shared memory behind a block barrier.
+    int lanes_block = 1;
+    int64_t lanes_block_iterations_max = 1024;
     // Whether the lanes of an iteration can share a loop that accumulates
     // into private scalars and combine what each lane accumulated
     // (GpuLaneReduce).
@@ -101,8 +110,15 @@ struct GpuDeviceCapabilities {
     int lane_reduction_max_kind = 8;
     // Whether the lanes of an iteration share loops whose iterations are
     // independent (gpu_vector_lanes.cpp). Off where only reductions are
-    // shared out (NVIDIA GPUs, for now).
+    // shared out (NVIDIA GPUs and Metal do).
     bool lane_independent_loops = true;
+    // Whether, in a reduction loop whose body holds a reduction loop of a
+    // fixed number of iterations of at least half the lanes (the 64 codes
+    // of a group of a quantized matrix-vector product), the lanes share
+    // out the inner loop and all go through the outer one, instead of one
+    // iteration of the outer loop per lane: the lanes then read along the
+    // inner loop's consecutive elements, not a group's length apart.
+    bool lane_inner_reductions_first = false;
 
     int threads_per_block = 256;
 

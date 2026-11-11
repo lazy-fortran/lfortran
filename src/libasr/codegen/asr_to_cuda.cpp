@@ -116,14 +116,20 @@ struct CudaDialect {
     // A kernel whose iterations each run on several lanes (see
     // gpu_vector_lanes.cpp; only on an NVIDIA GPU, whose warps run them)
     // takes no parameters for it: the lanes of an iteration are
-    // consecutive threads of a warp, `lanes` (1 or 32) dividing the block,
-    // and the prologue numbers the iterations by dividing the thread
-    // index and the block size by `lanes`.
+    // consecutive threads of a warp, `lanes` (a power of two up to 32)
+    // dividing the block, and the prologue numbers the iterations by
+    // dividing the thread index and the block size by `lanes`. With fewer
+    // than 32 lanes a warp runs several iterations, so a barrier or a
+    // shuffle names the lanes of its own iteration (__gpu_lane_mask) and
+    // does not wait for the others.
     void emit_lane_thread_params(std::stringstream & /*src*/,
             bool /*has_prev*/) const {}
     void emit_lane_prologue(std::stringstream &src, const std::string &indent,
             const std::string &lanes) const {
         src << indent << "int __gpu_lanes_n = " << lanes << ";\n";
+        src << indent << "unsigned __gpu_lane_mask = __gpu_lanes_n >= 32 ? "
+            "0xffffffffu : (((1u << __gpu_lanes_n) - 1u) << "
+            "(threadIdx.x & 31u & ~(unsigned)(__gpu_lanes_n - 1)));\n";
         src << indent << "int __gpu_lane = (int)(threadIdx.x % "
             "(unsigned)__gpu_lanes_n);\n";
         src << indent << "unsigned __gpu_iteration_thread = threadIdx.x / "
@@ -137,23 +143,28 @@ struct CudaDialect {
     // The value in the first lane of the iteration. With one lane per
     // iteration the threads of a warp run different iterations, which need
     // not reach the same shuffle, and the value is the thread's own.
-    std::string lane_broadcast(const std::string &value) const {
-        return "__lfortran_lane_broadcast(" + value + ", __gpu_lanes_n)";
+    std::string lane_broadcast(const std::string &value, bool block) const {
+        return std::string(block ? "__lfortran_lane_broadcast_block("
+            : "__lfortran_lane_broadcast(") + value
+            + ", __gpu_lanes_n, __gpu_lane_mask)";
     }
     // The lanes wait for each other: the threads of a warp, or, when the
-    // lanes are the whole block (more than a warp), the block.
+    // lanes may be the whole block (more than a warp), the block.
     void emit_lane_barrier(std::stringstream &src, const std::string &indent,
-            const std::string & /*lanes*/) const {
-        src << indent << "if (__gpu_lanes_n > 32) __syncthreads(); "
-            "else if (__gpu_lanes_n > 1) __syncwarp();\n";
+            const std::string & /*lanes*/, bool block) const {
+        src << indent << (block ? "__lfortran_lane_barrier_block("
+            : "__lfortran_lane_barrier(") << "__gpu_lanes_n, "
+            "__gpu_lane_mask);\n";
     }
     // What the lanes of the iteration hold, combined, in every lane
     // (__lfortran_lane_reduce in the prologue of the kernel source).
     // In a kernel without lanes, the lanes are the 32 threads of the warp.
     std::string lane_reduce(const std::string &value, int op,
-            bool has_lanes) const {
-        return "__lfortran_lane_reduce<" + std::to_string(op) + ">(" + value
-            + ", " + (has_lanes ? "__gpu_lanes_n" : "32") + ")";
+            bool has_lanes, bool block) const {
+        return std::string(has_lanes && block ? "__lfortran_lane_reduce_block<"
+            : "__lfortran_lane_reduce<") + std::to_string(op) + ">(" + value
+            + ", " + (has_lanes ? "__gpu_lanes_n, __gpu_lane_mask"
+                : "32, 0xffffffffu") + ")";
     }
     // The definition lane_reduce names, written once ahead of the kernels.
     std::string lane_reduce_helper() const {
@@ -165,44 +176,85 @@ struct CudaDialect {
             "    return op == 0 ? v + w : op == 1 ? v * w\n"
             "        : op == 2 ? (w < v ? w : v) : (w > v ? w : v);\n"
             "}\n\n"
+            "// The lanes are the warps of a block: each combines its own lanes,\n"
+            "// and every lane then folds the partial results of the warps in the\n"
+            "// same order.\n"
+            "template <int op, typename T>\n"
+            "__device__ __noinline__ T __lfortran_block_reduce(T v, int lanes) {\n"
+            "    #pragma unroll\n"
+            "    for (int offset = 16; offset > 0; offset >>= 1) {\n"
+            "        v = __lfortran_lane_combine<op>(v,\n"
+            "            __shfl_xor_sync(0xffffffffu, v, offset, 32));\n"
+            "    }\n"
+            "    __shared__ T partial[32];\n"
+            "    if ((threadIdx.x & 31u) == 0) partial[threadIdx.x >> 5] = v;\n"
+            "    __syncthreads();\n"
+            "    T r = partial[0];\n"
+            "    for (int i = 1; i < (lanes >> 5); i++) {\n"
+            "        r = __lfortran_lane_combine<op>(r, partial[i]);\n"
+            "    }\n"
+            "    __syncthreads();\n"
+            "    return r;\n"
+            "}\n\n"
             "// The combination of what the `lanes` lanes of an iteration hold,\n"
             "// in every lane: 0 adds, 1 multiplies, 2 takes the smallest, 3 the\n"
             "// largest. With one lane, the lane's own value.\n"
             "template <int op, typename T>\n"
-            "__device__ inline T __lfortran_lane_reduce(T v, int lanes) {\n"
-            "    int width = lanes < 32 ? lanes : 32;\n"
-            "    for (int offset = width >> 1; offset > 0; offset >>= 1) {\n"
-            "        v = __lfortran_lane_combine<op>(v,\n"
-            "            __shfl_xor_sync(0xffffffffu, v, offset, width));\n"
-            "    }\n"
-            "    if (lanes > 32) {\n"
-            "        // Every warp of the block holds the combination of its\n"
-            "        // own lanes; the warps combine theirs in shared memory.\n"
-            "        __shared__ T partial[32];\n"
-            "        if ((threadIdx.x & 31) == 0) partial[threadIdx.x >> 5] = v;\n"
-            "        __syncthreads();\n"
-            "        v = partial[0];\n"
-            "        for (int w = 1; w < (lanes >> 5); w++) {\n"
-            "            v = __lfortran_lane_combine<op>(v, partial[w]);\n"
+            "__device__ inline T __lfortran_lane_reduce(T v, int lanes, unsigned mask) {\n"
+            "    if (lanes == 32 || lanes == 16) {\n"
+            "        // The common sizes, with the shuffles unrolled.\n"
+            "        #pragma unroll\n"
+            "        for (int offset = 16; offset > 0; offset >>= 1) {\n"
+            "            if (offset < lanes) {\n"
+            "                v = __lfortran_lane_combine<op>(v,\n"
+            "                    __shfl_xor_sync(mask, v, offset, lanes));\n"
+            "            }\n"
             "        }\n"
-            "        __syncthreads();\n"
+            "        return v;\n"
+            "    }\n"
+            "    for (int offset = lanes >> 1; offset > 0; offset >>= 1) {\n"
+            "        v = __lfortran_lane_combine<op>(v,\n"
+            "            __shfl_xor_sync(mask, v, offset, lanes));\n"
             "    }\n"
             "    return v;\n"
             "}\n\n"
-            "// The value in the first lane of the iteration, in every lane.\n"
-            "// With one lane per iteration the threads of a warp run different\n"
-            "// iterations, which need not reach the same shuffle, and the value\n"
-            "// is the thread's own.\n"
+            "// For a kernel whose iterations may have the lanes of a block. Its\n"
+            "// barriers keep the other kernels from reordering their loads, so\n"
+            "// the others do not call these.\n"
+            "template <int op, typename T>\n"
+            "__device__ inline T __lfortran_lane_reduce_block(T v, int lanes, unsigned mask) {\n"
+            "    if (lanes > 32) return __lfortran_block_reduce<op>(v, lanes);\n"
+            "    return __lfortran_lane_reduce<op>(v, lanes, mask);\n"
+            "}\n\n"
+            "__device__ __noinline__ void __lfortran_block_barrier() {\n"
+            "    __syncthreads();\n"
+            "}\n\n"
+            "// Waits for the other lanes of the iteration.\n"
+            "__device__ inline void __lfortran_lane_barrier(int lanes, unsigned mask) {\n"
+            "    if (lanes > 1) __syncwarp(mask);\n"
+            "}\n\n"
+            "__device__ inline void __lfortran_lane_barrier_block(int lanes, unsigned mask) {\n"
+            "    if (lanes > 32) __lfortran_block_barrier();\n"
+            "    else if (lanes > 1) __syncwarp(mask);\n"
+            "}\n\n"
             "template <typename T>\n"
-            "__device__ inline T __lfortran_lane_broadcast(T v, int lanes) {\n"
-            "    if (lanes <= 1) return v;\n"
-            "    if (lanes <= 32) return __shfl_sync(0xffffffffu, v, 0, lanes);\n"
+            "__device__ __noinline__ T __lfortran_block_broadcast(T v, int lanes) {\n"
             "    __shared__ T first;\n"
-            "    if (threadIdx.x == 0) first = v;\n"
+            "    if ((threadIdx.x % (unsigned)lanes) == 0) first = v;\n"
             "    __syncthreads();\n"
             "    T r = first;\n"
             "    __syncthreads();\n"
             "    return r;\n"
+            "}\n\n"
+            "// The value of the first lane of the iteration, in every lane.\n"
+            "template <typename T>\n"
+            "__device__ inline T __lfortran_lane_broadcast(T v, int lanes, unsigned mask) {\n"
+            "    return lanes > 1 ? __shfl_sync(mask, v, 0, lanes) : v;\n"
+            "}\n\n"
+            "template <typename T>\n"
+            "__device__ inline T __lfortran_lane_broadcast_block(T v, int lanes, unsigned mask) {\n"
+            "    if (lanes > 32) return __lfortran_block_broadcast(v, lanes);\n"
+            "    return __lfortran_lane_broadcast(v, lanes, mask);\n"
             "}\n\n";
     }
 
@@ -217,6 +269,13 @@ struct CudaDialect {
     std::string unroll_pragma(bool deep = false) const {
         return emulate_cpu || hip ? std::string()
             : std::string(deep ? "#pragma unroll 64" : "#pragma unroll 16");
+    }
+    // A loop that combines the values of the lanes of an iteration in each
+    // of its iterations is unrolled by four: the shuffles of one iteration
+    // wait for the loads of the next otherwise.
+    std::string unroll_few_pragma() const {
+        return emulate_cpu || hip ? std::string()
+            : std::string("#pragma unroll 4");
     }
     // A bare literal is double precision, which would pick the wrong
     // overload of an intrinsic taking single precision arguments.
@@ -233,6 +292,11 @@ struct CudaDialect {
     // be worked out from all three.
     std::string global_thread_id() const {
         return "(blockIdx.x * blockDim.x + threadIdx.x)";
+    }
+    // The same for the lanes of an iteration, which all have the number of
+    // the iteration.
+    std::string lane_global_thread_id() const {
+        return "(blockIdx.x * __gpu_iteration_block + __gpu_iteration_thread)";
     }
 
     std::string uint_type() const {

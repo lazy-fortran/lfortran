@@ -68,6 +68,10 @@ public:
         needs_lane_reduce = true;
         ASR::BaseWalkVisitor<GpuMathHelperScanner>::visit_GpuLaneBroadcast(x);
     }
+    void visit_GpuLaneBarrier(const ASR::GpuLaneBarrier_t &x) {
+        needs_lane_reduce = true;
+        ASR::BaseWalkVisitor<GpuMathHelperScanner>::visit_GpuLaneBarrier(x);
+    }
     // The type of an integer power device code computes, by kind.
     std::map<int64_t, ASR::ttype_t*> integer_power_types;
     void visit_IntegerBinOp(const ASR::IntegerBinOp_t &x) {
@@ -265,8 +269,9 @@ public:
     }
 
     // The thread's slice of the workspace, or nullptr when the array is
-    // empty or not allocated. The slice starts at the thread's index times
-    // the slice size, which is multiplied in 64 bits whatever the dialect's
+    // empty or not allocated. The slice starts at the thread's index (the
+    // iteration's, for the lanes of an iteration, which share its slice)
+    // times the slice size, which is multiplied in 64 bits whatever the dialect's
     // kind for element offsets: one thread's slice is an array the kernel
     // indexes in that kind, but the slices of all threads together hold
     // more than 2**32 elements of a buffer with modest slices and many
@@ -283,8 +288,9 @@ public:
             active += ")";
         }
         return active + ") ? (" + gpu_workspace_buffer_name(ws.buffer_index) +
-            " + ((" + gpu_offset_type(8) + ")" + dialect.global_thread_id() +
-            ") * " + slice + ") : nullptr";
+            " + ((" + gpu_offset_type(8) + ")" + (kernel_has_lanes()
+                ? dialect.lane_global_thread_id() : dialect.global_thread_id())
+            + ") * " + slice + ") : nullptr";
     }
 
     // The element count of one thread's slice of a workspace, which the
@@ -4186,6 +4192,12 @@ public:
             && current_kernel_layout->m_lanes != nullptr;
     }
 
+    // Whether a launch may give an iteration of the kernel being written
+    // the lanes of a whole block, more than a SIMD-group has.
+    bool kernel_has_block_lanes() const {
+        return kernel_has_lanes() && current_kernel_layout->m_lanes_max > 32;
+    }
+
     // Whether a sequential loop with this body is unrolled
     // (dialect.unroll_pragma): one of at most 8 statements with no loop in
     // it, such as the inner product of a matrix-vector product. Unrolled,
@@ -4206,6 +4218,28 @@ public:
         HasLoop h;
         for (size_t i = 0; i < n_body && !h.found; i++) h.visit_stmt(*body[i]);
         return !h.found;
+    }
+
+    // Whether the statements combine the values of the lanes of an
+    // iteration (GpuLaneReduce).
+    static bool holds_lane_reduce(ASR::stmt_t **body, size_t n_body) {
+        class Found : public ASR::BaseWalkVisitor<Found> {
+        public:
+            bool found = false;
+            void visit_GpuLaneReduce(const ASR::GpuLaneReduce_t &) {
+                found = true;
+            }
+            void visit_BlockCall(const ASR::BlockCall_t &x) {
+                ASR::Block_t *block = ASR::down_cast<ASR::Block_t>(
+                    ASRUtils::symbol_get_past_external(x.m_m));
+                for (size_t i = 0; i < block->n_body; i++) {
+                    this->visit_stmt(*block->m_body[i]);
+                }
+            }
+        };
+        Found f;
+        for (size_t i = 0; i < n_body && !f.found; i++) f.visit_stmt(*body[i]);
+        return f.found;
     }
 
     // Whether `kernel` has a small innermost loop (small_innermost_loop)
@@ -4335,7 +4369,7 @@ public:
     // on it.
     void emit_counted_for(const ASR::do_loop_head_t &head,
             const std::set<ASR::symbol_t*> &written, const Location &loc,
-            bool unroll = false) {
+            bool unroll = false, bool unroll_few = false) {
         if (head.m_v == nullptr) {
             src << get_indent() << "for (;;) {\n";
             return;
@@ -4389,6 +4423,8 @@ public:
         }
         if (pragma) {
             src << get_indent() << dialect.unroll_pragma(deep) << "\n";
+        } else if (unroll_few && !dialect.unroll_few_pragma().empty()) {
+            src << get_indent() << dialect.unroll_few_pragma() << "\n";
         }
         src << get_indent() << "for (" << v << " = ";
         visit_expr(head.m_start);
@@ -5087,7 +5123,8 @@ public:
                 LCOMPILERS_ASSERT(current_kernel_layout != nullptr
                     && current_kernel_layout->m_lanes != nullptr);
                 dialect.emit_lane_barrier(src, get_indent(),
-                    ASRUtils::symbol_name(current_kernel_layout->m_lanes));
+                    ASRUtils::symbol_name(current_kernel_layout->m_lanes),
+                    kernel_has_block_lanes());
                 break;
             }
             case ASR::stmtType::Return: {
@@ -5128,7 +5165,8 @@ public:
                     written.insert(gpu_designator_base(dl->m_head.m_v).root);
                 }
                 emit_counted_for(dl->m_head, written, stmt->base.loc,
-                    small_innermost_loop(dl->m_body, dl->n_body));
+                    small_innermost_loop(dl->m_body, dl->n_body),
+                    holds_lane_reduce(dl->m_body, dl->n_body));
                 emit_loop_body(frame, dl->m_body, dl->n_body);
                 break;
             }
@@ -6155,7 +6193,7 @@ public:
                     : r->m_op == ASR::reduction_opType::ReduceMul ? 1
                     : r->m_op == ASR::reduction_opType::ReduceMIN ? 2 : 3;
                 src << dialect.lane_reduce(expr_str(r->m_arg), op,
-                    kernel_has_lanes());
+                    kernel_has_lanes(), kernel_has_block_lanes());
                 break;
             }
             case ASR::exprType::GpuLaneIndex: {
@@ -6168,9 +6206,11 @@ public:
                 // A logical travels as an integer.
                 if (ASRUtils::is_logical(*b->m_type)) {
                     src << "(" << dialect.lane_broadcast("(int)("
-                        + expr_str(b->m_arg) + ")") << " != 0)";
+                        + expr_str(b->m_arg) + ")", kernel_has_block_lanes())
+                        << " != 0)";
                 } else {
-                    src << dialect.lane_broadcast(expr_str(b->m_arg));
+                    src << dialect.lane_broadcast(expr_str(b->m_arg),
+                        kernel_has_block_lanes());
                 }
                 break;
             }

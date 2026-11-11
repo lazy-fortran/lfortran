@@ -1813,6 +1813,8 @@ end module
     std::string expected =
         // Elements of self%out and self%w.
         "forward:load float:allocated component; "
+        // Elements of x, which is passed by its data pointer.
+        "forward:load float:data; "
         // Offsets, lower bounds and strides of the descriptors.
         "forward:load i64:descriptor; "
         // The class wrapper (self), the descriptor pointers of the
@@ -1820,8 +1822,10 @@ end module
         "forward:load pointer:descriptor; "
         "forward:store float:allocated component; "
         // TRANSFER reinterprets each element through an untagged scalar;
-        // only the integer elements of the local fixed-size temporary that
-        // holds its result are tagged.
+        // only the elements of the explicit-shape dummy argument x and the
+        // integer elements of the local fixed-size temporary that holds its
+        // result are tagged.
+        "pun:load float:data; "
         "pun:load i32:data; "
         "pun:store i32:data; ";
     CHECK(tbaa_accesses(source, true, procedures) == expected);
@@ -6968,7 +6972,13 @@ TEST_CASE("FortranEvaluator execute: a streaming cell keeps the main thread's st
         MESSAGE("RLIMIT_STACK is below 8 MiB; skipping");
         return;
     }
+// pthread_getattr_default_np and pthread_setattr_default_np were added in
+// glibc 2.18. The conda-forge linux build compiles against the glibc 2.17
+// sysroot, whose pthread.h does not declare them. Keep the __GLIBC__ test
+// outside the version check: Clang rejects an undefined function-like macro
+// in #if, so macOS must not expand __GLIBC_PREREQ.
 #ifdef __GLIBC__
+#if __GLIBC_PREREQ(2, 18)
     struct DefaultStack {
         pthread_attr_t saved;
         DefaultStack() {
@@ -6984,6 +6994,7 @@ TEST_CASE("FortranEvaluator execute: a streaming cell keeps the main thread's st
             pthread_attr_destroy(&saved);
         }
     } default_stack;
+#endif
 #endif
     CompilerOptions cu = execute_options();
     FortranEvaluator e(cu);

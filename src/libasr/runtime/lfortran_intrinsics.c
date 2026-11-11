@@ -18,6 +18,12 @@
 #include <stdint.h>
 #include <stddef.h>  /* ptrdiff_t */
 #include <sys/stat.h>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#if defined(__linux__) && defined(__GLIBC__) && !defined(__EMSCRIPTEN__)
+#include <sys/mman.h>
+#endif
+#endif
 #if !defined(COMPILE_TO_WASM)
 #include <fenv.h>
 #endif
@@ -154,8 +160,24 @@ static char *input_gets(char *buffer, int size, FILE *file)
     return i || size == 1 ? buffer : NULL;
 }
 
+#if defined(__linux__) && defined(__GLIBC__) \
+        && !defined(__EMSCRIPTEN__) && defined(LFORTRAN_READAHEAD_THREADS)
+#define LFORTRAN_READAHEAD 1
+#include <pthread.h>
+#endif
+
+#ifdef LFORTRAN_READAHEAD
+static int64_t ra_big_read(FILE *file, void *buffer, size_t bytes);
+#endif
+
 static size_t input_read(void *buffer, size_t size, size_t count, FILE *file)
 {
+#ifdef LFORTRAN_READAHEAD
+    if (size && count <= SIZE_MAX / size && size * count >= (1u << 20)) {
+        int64_t got = ra_big_read(file, buffer, size * count);
+        if (got >= 0) return (size_t)got / size;
+    }
+#endif
     if (!provided_stdin(file)) return fread(buffer, size, count, file);
     if (!size || count > SIZE_MAX / size) return 0;
     size_t i = 0, bytes = size * count;
@@ -1822,7 +1844,8 @@ static void f128_load(const lf_float128 *v, f128_dec *o) {
         o->kind = 2;
         return;
     }
-    lf_float128_to_str(buf, v->bytes);
+    // 40 digits, so that 36 digits (the most binary128 needs) are exact
+    lf_float128_to_str_digits(buf, v->bytes, 40);
     p = buf;
     if (*p == '-') {
         o->negative = 1;
@@ -4610,6 +4633,10 @@ void default_formatting(lfortran_allocator_t* al, char** result, int64_t *result
             size_to_allocate = (s_info->current_arg_info.current_string_len
                                     * (s_info->current_arg_info.current_string_kind > 1 ? 4 : 1)
                                  + default_spacing_len + 1) * sizeof(char);
+        } else if (s_info->current_element_type == FLOAT_128_TYPE &&
+                s_info->current_arg_info.is_complex) {
+            // Two binary128 numbers, with the parentheses and the comma.
+            size_to_allocate = (2 * 60 + 8 + default_spacing_len) * sizeof(char);
         } else {
             size_to_allocate = (60 + default_spacing_len) * sizeof(char);
         }
@@ -6624,6 +6651,301 @@ LFORTRAN_API void _lfortran_complex_pow_int_64(struct _lfortran_complex_64* a,
     }
     *result = res;
 }
+
+// complex(16) -------------------------------------------------------------
+//
+// A complex(16) value is two binary128 numbers. Every routine takes and
+// returns it through pointers, so the interface does not depend on how a
+// platform passes a pair of binary128 values by value. The arithmetic uses
+// the soft-float routines of lfortran_float128.c.
+
+struct _lfortran_complex_128 {
+    lf_float128 re, im;
+};
+
+static lf_float128 c128_real(double v) { return lf_f128_from_double(v); }
+
+static struct _lfortran_complex_128 c128_make(lf_float128 re, lf_float128 im) {
+    struct _lfortran_complex_128 r;
+    r.re = re;
+    r.im = im;
+    return r;
+}
+
+static struct _lfortran_complex_128 c128_add(struct _lfortran_complex_128 a,
+        struct _lfortran_complex_128 b) {
+    return c128_make(lf_f128_add(a.re, b.re), lf_f128_add(a.im, b.im));
+}
+
+static struct _lfortran_complex_128 c128_sub(struct _lfortran_complex_128 a,
+        struct _lfortran_complex_128 b) {
+    return c128_make(lf_f128_sub(a.re, b.re), lf_f128_sub(a.im, b.im));
+}
+
+static struct _lfortran_complex_128 c128_mul(struct _lfortran_complex_128 a,
+        struct _lfortran_complex_128 b) {
+    return c128_make(
+        lf_f128_sub(lf_f128_mul(a.re, b.re), lf_f128_mul(a.im, b.im)),
+        lf_f128_add(lf_f128_mul(a.re, b.im), lf_f128_mul(a.im, b.re)));
+}
+
+static struct _lfortran_complex_128 c128_div(struct _lfortran_complex_128 a,
+        struct _lfortran_complex_128 b) {
+    // Smith's algorithm, as for the lower precisions.
+    lf_float128 zero = c128_real(0.0);
+    if (lf_f128_cmp(lf_f128_abs(b.re), lf_f128_abs(b.im)) >= 0) {
+        if (lf_f128_eq(b.re, zero) && lf_f128_eq(b.im, zero)) {
+            return c128_make(lf_f128_div(a.re, zero), lf_f128_div(a.im, zero));
+        }
+        lf_float128 ratio = lf_f128_div(b.im, b.re);
+        lf_float128 denom = lf_f128_add(b.re, lf_f128_mul(b.im, ratio));
+        return c128_make(
+            lf_f128_div(lf_f128_add(a.re, lf_f128_mul(a.im, ratio)), denom),
+            lf_f128_div(lf_f128_sub(a.im, lf_f128_mul(a.re, ratio)), denom));
+    }
+    lf_float128 ratio = lf_f128_div(b.re, b.im);
+    lf_float128 denom = lf_f128_add(lf_f128_mul(b.re, ratio), b.im);
+    return c128_make(
+        lf_f128_div(lf_f128_add(lf_f128_mul(a.re, ratio), a.im), denom),
+        lf_f128_div(lf_f128_sub(lf_f128_mul(a.im, ratio), a.re), denom));
+}
+
+static lf_float128 c128_abs(struct _lfortran_complex_128 z) {
+    lf_float128 zero = c128_real(0.0);
+    lf_float128 x = lf_f128_abs(z.re), y = lf_f128_abs(z.im);
+    if (lf_f128_isinf(x) || lf_f128_isinf(y)) {
+        return lf_f128_div(c128_real(1.0), zero);
+    }
+    if (lf_f128_isnan(x) || lf_f128_isnan(y)) {
+        return lf_f128_div(zero, zero);
+    }
+    if (lf_f128_cmp(x, y) < 0) {
+        lf_float128 t = x;
+        x = y;
+        y = t;
+    }
+    if (lf_f128_eq(x, zero)) {
+        return zero;
+    }
+    // Scale by the larger part so that the squares do not overflow.
+    lf_float128 r = lf_f128_div(y, x);
+    return lf_f128_mul(x, lf_f128_sqrt(
+        lf_f128_add(c128_real(1.0), lf_f128_mul(r, r))));
+}
+
+static struct _lfortran_complex_128 c128_neg(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_neg(z.re), lf_f128_neg(z.im));
+}
+
+static struct _lfortran_complex_128 c128_mul_i(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_neg(z.im), z.re);
+}
+
+static struct _lfortran_complex_128 c128_sqrt(struct _lfortran_complex_128 z) {
+    lf_float128 zero = c128_real(0.0), half = c128_real(0.5);
+    if (lf_f128_eq(z.re, zero) && lf_f128_eq(z.im, zero)) {
+        return c128_make(zero, z.im);
+    }
+    lf_float128 t = lf_f128_sqrt(lf_f128_mul(half,
+        lf_f128_add(c128_abs(z), lf_f128_abs(z.re))));
+    lf_float128 two_t = lf_f128_add(t, t);
+    if (lf_f128_signbit(z.re) == 0) {
+        return c128_make(t, lf_f128_div(z.im, two_t));
+    }
+    lf_float128 re = lf_f128_div(lf_f128_abs(z.im), two_t);
+    return c128_make(re, lf_f128_signbit(z.im) ? lf_f128_neg(t) : t);
+}
+
+static struct _lfortran_complex_128 c128_exp(struct _lfortran_complex_128 z) {
+    lf_float128 e = lf_f128_exp(z.re);
+    return c128_make(lf_f128_mul(e, lf_f128_cos(z.im)),
+        lf_f128_mul(e, lf_f128_sin(z.im)));
+}
+
+static struct _lfortran_complex_128 c128_log(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_log(c128_abs(z)), lf_f128_atan2(z.im, z.re));
+}
+
+static struct _lfortran_complex_128 c128_sin(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_mul(lf_f128_sin(z.re), lf_f128_cosh(z.im)),
+        lf_f128_mul(lf_f128_cos(z.re), lf_f128_sinh(z.im)));
+}
+
+static struct _lfortran_complex_128 c128_cos(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_mul(lf_f128_cos(z.re), lf_f128_cosh(z.im)),
+        lf_f128_neg(lf_f128_mul(lf_f128_sin(z.re), lf_f128_sinh(z.im))));
+}
+
+static struct _lfortran_complex_128 c128_sinh(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_mul(lf_f128_sinh(z.re), lf_f128_cos(z.im)),
+        lf_f128_mul(lf_f128_cosh(z.re), lf_f128_sin(z.im)));
+}
+
+static struct _lfortran_complex_128 c128_cosh(struct _lfortran_complex_128 z) {
+    return c128_make(lf_f128_mul(lf_f128_cosh(z.re), lf_f128_cos(z.im)),
+        lf_f128_mul(lf_f128_sinh(z.re), lf_f128_sin(z.im)));
+}
+
+static struct _lfortran_complex_128 c128_tan(struct _lfortran_complex_128 z) {
+    return c128_div(c128_sin(z), c128_cos(z));
+}
+
+static struct _lfortran_complex_128 c128_tanh(struct _lfortran_complex_128 z) {
+    return c128_div(c128_sinh(z), c128_cosh(z));
+}
+
+static struct _lfortran_complex_128 c128_asinh(struct _lfortran_complex_128 z) {
+    // log(z + sqrt(z*z + 1))
+    struct _lfortran_complex_128 one = c128_make(c128_real(1.0), c128_real(0.0));
+    return c128_log(c128_add(z, c128_sqrt(c128_add(c128_mul(z, z), one))));
+}
+
+static struct _lfortran_complex_128 c128_asin(struct _lfortran_complex_128 z) {
+    // asin(z) = -i asinh(i z)
+    struct _lfortran_complex_128 r = c128_asinh(c128_mul_i(z));
+    return c128_make(r.im, lf_f128_neg(r.re));
+}
+
+static struct _lfortran_complex_128 c128_acos(struct _lfortran_complex_128 z) {
+    // acos(z) = pi/2 - asin(z)
+    lf_float128 half_pi = lf_float128_from_str("1.57079632679489661923132169163975144");
+    struct _lfortran_complex_128 a = c128_asin(z);
+    return c128_make(lf_f128_sub(half_pi, a.re), lf_f128_neg(a.im));
+}
+
+static struct _lfortran_complex_128 c128_acosh(struct _lfortran_complex_128 z) {
+    // log(z + sqrt(z + 1) sqrt(z - 1))
+    struct _lfortran_complex_128 one = c128_make(c128_real(1.0), c128_real(0.0));
+    return c128_log(c128_add(z, c128_mul(c128_sqrt(c128_add(z, one)),
+        c128_sqrt(c128_sub(z, one)))));
+}
+
+static struct _lfortran_complex_128 c128_atanh(struct _lfortran_complex_128 z) {
+    // (log(1 + z) - log(1 - z)) / 2
+    struct _lfortran_complex_128 one = c128_make(c128_real(1.0), c128_real(0.0));
+    struct _lfortran_complex_128 d = c128_sub(c128_log(c128_add(one, z)),
+        c128_log(c128_sub(one, z)));
+    lf_float128 half = c128_real(0.5);
+    return c128_make(lf_f128_mul(half, d.re), lf_f128_mul(half, d.im));
+}
+
+static struct _lfortran_complex_128 c128_atan(struct _lfortran_complex_128 z) {
+    // atan(z) = -i atanh(i z)
+    struct _lfortran_complex_128 r = c128_atanh(c128_mul_i(z));
+    return c128_make(r.im, lf_f128_neg(r.re));
+}
+
+static struct _lfortran_complex_128 c128_pow(struct _lfortran_complex_128 a,
+        struct _lfortran_complex_128 b) {
+    lf_float128 zero = c128_real(0.0);
+    if (lf_f128_eq(a.re, zero) && lf_f128_eq(a.im, zero)) {
+        if (lf_f128_eq(b.re, zero) && lf_f128_eq(b.im, zero)) {
+            return c128_make(c128_real(1.0), zero);
+        }
+        return c128_make(zero, zero);
+    }
+    return c128_exp(c128_mul(b, c128_log(a)));
+}
+
+static struct _lfortran_complex_128 c128_pow_int(struct _lfortran_complex_128 a,
+        int64_t n) {
+    struct _lfortran_complex_128 result = c128_make(c128_real(1.0), c128_real(0.0));
+    if (n == 0) {
+        return result;
+    }
+    uint64_t u = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
+    struct _lfortran_complex_128 base = a;
+    while (u != 0) {
+        if (u & 1) {
+            result = c128_mul(result, base);
+        }
+        base = c128_mul(base, base);
+        u >>= 1;
+    }
+    if (n < 0) {
+        result = c128_div(c128_make(c128_real(1.0), c128_real(0.0)), result);
+    }
+    return result;
+}
+
+LFORTRAN_API void _lfortran_complex_add_128(struct _lfortran_complex_128* a,
+        struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
+{
+    *result = c128_add(*a, *b);
+}
+
+LFORTRAN_API void _lfortran_complex_sub_128(struct _lfortran_complex_128* a,
+        struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
+{
+    *result = c128_sub(*a, *b);
+}
+
+LFORTRAN_API void _lfortran_complex_mul_128(struct _lfortran_complex_128* a,
+        struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
+{
+    *result = c128_mul(*a, *b);
+}
+
+LFORTRAN_API void _lfortran_complex_div_128(struct _lfortran_complex_128* a,
+        struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
+{
+    *result = c128_div(*a, *b);
+}
+
+LFORTRAN_API void _lfortran_complex_pow_128(struct _lfortran_complex_128* a,
+        struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
+{
+    *result = c128_pow(*a, *b);
+}
+
+LFORTRAN_API void _lfortran_complex_pow_int_128(struct _lfortran_complex_128* a,
+        int64_t n, struct _lfortran_complex_128 *result)
+{
+    *result = c128_pow_int(*a, n);
+}
+
+LFORTRAN_API void _lfortran_c128_abs(struct _lfortran_complex_128 *x,
+        lf_float128 *result)
+{
+    *result = c128_abs(*x);
+}
+
+LFORTRAN_API void _lfortran_c128_phase(struct _lfortran_complex_128 *x,
+        lf_float128 *result)
+{
+    *result = lf_f128_atan2(x->im, x->re);
+}
+
+LFORTRAN_API void _lfortran_c128_sqrt(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_sqrt(*x); }
+LFORTRAN_API void _lfortran_c128_exp(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_exp(*x); }
+LFORTRAN_API void _lfortran_c128_log(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_log(*x); }
+LFORTRAN_API void _lfortran_c128_sin(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_sin(*x); }
+LFORTRAN_API void _lfortran_c128_cos(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_cos(*x); }
+LFORTRAN_API void _lfortran_c128_tan(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_tan(*x); }
+LFORTRAN_API void _lfortran_c128_sinh(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_sinh(*x); }
+LFORTRAN_API void _lfortran_c128_cosh(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_cosh(*x); }
+LFORTRAN_API void _lfortran_c128_tanh(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_tanh(*x); }
+LFORTRAN_API void _lfortran_c128_asin(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_asin(*x); }
+LFORTRAN_API void _lfortran_c128_acos(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_acos(*x); }
+LFORTRAN_API void _lfortran_c128_atan(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_atan(*x); }
+LFORTRAN_API void _lfortran_c128_asinh(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_asinh(*x); }
+LFORTRAN_API void _lfortran_c128_acosh(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_acosh(*x); }
+LFORTRAN_API void _lfortran_c128_atanh(struct _lfortran_complex_128 *x,
+        struct _lfortran_complex_128 *result) { *result = c128_atanh(*x); }
 
 int64_t _lfortran_integer_pow_64(int64_t base, int64_t exponent){ // Binary Exponentiation
     int64_t res = 1;
@@ -8780,6 +9102,474 @@ static bool fortran_str_eq(const char *s, int64_t len, const char *word)
     return true;
 }
 
+#ifdef LFORTRAN_READAHEAD
+/*
+ A stream file opened for reading only is read through a window of segments
+ that helper threads fill ahead of the reader, once the reader has read
+ sequentially for a while. A program that reads a large file in small pieces
+ (a model of many gigabytes, in 64 KiB pieces, say) then copies from the page
+ cache on several cores while the reader works on the pieces it has, instead
+ of waiting for one core to copy everything and one system call for every
+ piece. A file that is read in a few small reads costs no thread.
+*/
+enum { RA_SEGMENT_BYTES = 1 << 18, RA_SEGMENTS = 32, RA_WORKERS = 4,
+    RA_ENGAGE_BYTES = 1 << 20 };
+enum { RA_FREE = 0, RA_QUEUED, RA_FILLING, RA_READY };
+
+typedef struct ra_segment {
+    int64_t start;
+    int64_t length;
+    int state;
+} ra_segment;
+
+typedef struct ra_file {
+    int fd;
+    int64_t size;
+    int64_t pos;
+    // The bytes read one after the other so far.
+    int64_t sequential;
+    // The segment the last read copied from, which is ready and which only
+    // the reader frees: a read inside it needs no lock.
+    int64_t cur_start;
+    int64_t cur_end;
+    int cur_segment;
+    char *memory;
+    ra_segment segments[RA_SEGMENTS];
+    // The window holds the segments from `first`, `count` of them, which
+    // follow each other in the file; the next one starts at `next_start`.
+    int first;
+    int count;
+    int64_t next_start;
+    int active;
+    FILE *fp;
+} ra_file;
+
+// The helper threads serve every file with a window, and live until the
+// program ends. `ra_lock` guards the windows and the list of those files.
+enum { RA_MAX_FILES = 64 };
+static pthread_mutex_t ra_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ra_work = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t ra_done = PTHREAD_COND_INITIALIZER;
+static ra_file *ra_files[RA_MAX_FILES];
+static int ra_workers = 0;
+// Memory of a window whose file was closed, kept for the next one.
+static char *ra_spare = NULL;
+
+static ssize_t ra_pread(int fd, char *buffer, int64_t length, int64_t offset)
+{
+    int64_t done = 0;
+    while (done < length) {
+        ssize_t n = pread(fd, buffer + done, (size_t)(length - done),
+            (off_t)(offset + done));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) break;
+        done += n;
+    }
+    return (ssize_t)done;
+}
+
+static void *ra_worker(void *arg)
+{
+    (void)arg;
+    pthread_mutex_lock(&ra_lock);
+    for (;;) {
+        ra_file *f = NULL;
+        int found = -1;
+        for (int j = 0; j < RA_MAX_FILES && found < 0; j++) {
+            if (!ra_files[j]) continue;
+            for (int i = 0; i < ra_files[j]->count && found < 0; i++) {
+                int k = (ra_files[j]->first + i) % RA_SEGMENTS;
+                if (ra_files[j]->segments[k].state == RA_QUEUED) {
+                    found = k;
+                    f = ra_files[j];
+                }
+            }
+        }
+        if (found < 0) {
+            pthread_cond_wait(&ra_work, &ra_lock);
+            continue;
+        }
+        ra_segment *seg = &f->segments[found];
+        seg->state = RA_FILLING;
+        int64_t start = seg->start, length = seg->length;
+        pthread_mutex_unlock(&ra_lock);
+        ssize_t n = ra_pread(f->fd, f->memory + (size_t)found*RA_SEGMENT_BYTES,
+            length, start);
+        pthread_mutex_lock(&ra_lock);
+        seg->length = n < 0 ? 0 : n;
+        seg->state = RA_READY;
+        pthread_cond_broadcast(&ra_done);
+    }
+    return NULL;
+}
+
+
+// A read of at least PAR_READ_BYTES goes straight to the caller's buffer with
+// PAR_READ_THREADS threads, each reading its own part of the range: a single
+// core copies from the page cache at 5-10 GB/s, and into memory that is not
+// yet mapped (the first touch of a managed GPU array, say) at less. The
+// number of threads is LFORTRAN_READ_THREADS (1 turns this off).
+enum { PAR_READ_BYTES = 1 << 20, PAR_READ_PART = 512 << 10,
+    PAR_READ_THREADS = 8, PAR_READ_MAX = 64 };
+
+typedef struct par_read_part {
+    int fd;
+    char *buffer;
+    int64_t length;
+    int64_t offset;
+    ssize_t result;
+} par_read_part;
+
+static void *par_read_main(void *arg)
+{
+    par_read_part *p = (par_read_part*)arg;
+    p->result = ra_pread(p->fd, p->buffer, p->length, p->offset);
+    return NULL;
+}
+
+static int par_read_threads(void)
+{
+    static int threads = 0;
+    if (threads == 0) {
+        const char *value = getenv("LFORTRAN_READ_THREADS");
+        threads = value && value[0] ? atoi(value) : PAR_READ_THREADS;
+        if (threads < 1) threads = 1;
+        if (threads > PAR_READ_MAX) threads = PAR_READ_MAX;
+    }
+    return threads;
+}
+
+// Reads `length` bytes at `offset` of `fd` into `buffer`; returns the number
+// of bytes read, or -1.
+static ssize_t par_pread(int fd, char *buffer, int64_t length, int64_t offset)
+{
+    int threads = par_read_threads();
+    if (threads > length / PAR_READ_PART) threads = (int)(length / PAR_READ_PART);
+    if (threads < 1) threads = 1;
+    int64_t part = (length / threads + 4095) & ~(int64_t)4095;
+    par_read_part parts[PAR_READ_MAX];
+    pthread_t ids[PAR_READ_MAX];
+    int started[PAR_READ_MAX];
+    int n = 0;
+    for (int64_t start = 0; start < length; start += part, n++) {
+        parts[n].fd = fd;
+        parts[n].buffer = buffer + start;
+        parts[n].length = length - start < part ? length - start : part;
+        parts[n].offset = offset + start;
+        parts[n].result = -1;
+    }
+    for (int i = 1; i < n; i++) {
+        started[i] = pthread_create(&ids[i], NULL, par_read_main, &parts[i]) == 0;
+    }
+    par_read_main(&parts[0]);
+    int64_t total = 0;
+    int failed = parts[0].result < 0;
+    for (int i = 1; i < n; i++) {
+        if (started[i]) pthread_join(ids[i], NULL);
+        else par_read_main(&parts[i]);
+        if (parts[i].result < 0) failed = 1;
+    }
+    for (int i = 0; i < n; i++) {
+        if (parts[i].result < 0) break;
+        total += parts[i].result;
+        if (parts[i].result < parts[i].length) break;
+    }
+    return failed && total == 0 ? -1 : (ssize_t)total;
+}
+
+
+// Every stream file opened through a window, by its FILE: a big read finds
+// the file it reads from here.
+static ra_file *ra_open_files[RA_MAX_FILES];
+
+static void ra_register(ra_file *f)
+{
+    pthread_mutex_lock(&ra_lock);
+    for (int j = 0; j < RA_MAX_FILES; j++) {
+        if (!ra_open_files[j]) {
+            ra_open_files[j] = f;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&ra_lock);
+}
+
+static void ra_unregister(ra_file *f)
+{
+    pthread_mutex_lock(&ra_lock);
+    for (int j = 0; j < RA_MAX_FILES; j++) {
+        if (ra_open_files[j] == f) ra_open_files[j] = NULL;
+    }
+    pthread_mutex_unlock(&ra_lock);
+}
+
+// glibc reads a stream whose file is a cookie in pieces of its buffer (8 KiB)
+// however large the fread is, so a program that reads a big array in one
+// statement makes as many calls as the array has pieces, each copying from the
+// page cache and then into the array. A read of at least PAR_READ_BYTES from
+// such a file is made here instead, directly into `buffer` and by several
+// threads. Returns the bytes read, or -1 when `file` is not such a file.
+static int64_t ra_big_read(FILE *file, void *buffer, size_t bytes)
+{
+    if (par_read_threads() < 2) return -1;
+    ra_file *f = NULL;
+    pthread_mutex_lock(&ra_lock);
+    for (int j = 0; j < RA_MAX_FILES; j++) {
+        if (ra_open_files[j] && ra_open_files[j]->fp == file) {
+            f = ra_open_files[j];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&ra_lock);
+    if (!f) return -1;
+    long at = ftell(file);
+    if (at < 0 || at > f->size) return -1;
+    int64_t want = (int64_t)bytes;
+    if (want > f->size - at) want = f->size - at;
+    if (want <= 0) return 0;
+    ssize_t n = par_pread(f->fd, (char*)buffer, want, at);
+    if (n < 0) return -1;
+    // Drop what the stream holds and continue after the bytes read.
+    if (fseek(file, at + n, SEEK_SET) != 0) return -1;
+    return n;
+}
+
+// Waits until no helper is filling a segment, and empties the window.
+static void ra_reset_window(ra_file *f)
+{
+    for (;;) {
+        int busy = 0;
+        for (int i = 0; i < f->count; i++) {
+            if (f->segments[(f->first + i) % RA_SEGMENTS].state == RA_FILLING) {
+                busy = 1;
+            }
+        }
+        if (!busy) break;
+        pthread_cond_wait(&ra_done, &ra_lock);
+    }
+    for (int i = 0; i < RA_SEGMENTS; i++) f->segments[i].state = RA_FREE;
+    f->cur_start = f->cur_end = 0;
+    f->count = 0;
+    f->first = 0;
+}
+
+// Queues segments at the end of the window while there is room.
+static void ra_schedule(ra_file *f)
+{
+    int queued = 0;
+    while (f->count < RA_SEGMENTS && f->next_start < f->size) {
+        int k = (f->first + f->count) % RA_SEGMENTS;
+        int64_t length = f->size - f->next_start;
+        if (length > RA_SEGMENT_BYTES) length = RA_SEGMENT_BYTES;
+        f->segments[k].start = f->next_start;
+        f->segments[k].length = length;
+        f->segments[k].state = RA_QUEUED;
+        f->next_start += length;
+        f->count++;
+        queued = 1;
+    }
+    if (queued) pthread_cond_broadcast(&ra_work);
+}
+
+// Gives the file a window and starts the helper threads if they are not
+// running. Returns 0 if it cannot.
+static int ra_start(ra_file *f)
+{
+    pthread_mutex_lock(&ra_lock);
+    while (ra_workers < RA_WORKERS) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, ra_worker, NULL) != 0) break;
+        pthread_detach(thread);
+        ra_workers++;
+    }
+    int slot = -1;
+    for (int j = 0; j < RA_MAX_FILES && slot < 0; j++) {
+        if (!ra_files[j]) slot = j;
+    }
+    char *memory = ra_spare;
+    ra_spare = NULL;
+    if (ra_workers == 0 || slot < 0) {
+        pthread_mutex_unlock(&ra_lock);
+        if (memory) munmap(memory, (size_t)RA_SEGMENTS*RA_SEGMENT_BYTES);
+        return 0;
+    }
+    pthread_mutex_unlock(&ra_lock);
+    if (!memory) {
+        void *m = mmap(NULL, (size_t)RA_SEGMENTS*RA_SEGMENT_BYTES,
+            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m == MAP_FAILED) return 0;
+        memory = (char*)m;
+    }
+    pthread_mutex_lock(&ra_lock);
+    f->memory = memory;
+    f->active = 1;
+    ra_files[slot] = f;
+    pthread_mutex_unlock(&ra_lock);
+    return 1;
+}
+
+static ssize_t ra_read(void *cookie, char *buffer, size_t size)
+{
+    ra_file *f = (ra_file*)cookie;
+    if (f->pos >= f->size || size == 0) return 0;
+    int64_t want = (int64_t)size;
+    if (want > f->size - f->pos) want = f->size - f->pos;
+    int64_t copied = 0;
+    if (!f->memory) {
+        ssize_t n = ra_pread(f->fd, buffer, want, f->pos);
+        if (n < 0) return -1;
+        f->pos += n;
+        f->sequential += n;
+        if (f->sequential < RA_ENGAGE_BYTES || f->pos >= f->size
+                || !ra_start(f)) {
+            return n;
+        }
+        pthread_mutex_lock(&ra_lock);
+        f->next_start = f->pos;
+        ra_schedule(f);
+        pthread_mutex_unlock(&ra_lock);
+        return n;
+    }
+    if (f->pos >= f->cur_start && f->pos + want <= f->cur_end) {
+        memcpy(buffer, f->memory + (size_t)f->cur_segment*RA_SEGMENT_BYTES
+            + (f->pos - f->cur_start), (size_t)want);
+        f->pos += want;
+        f->sequential += want;
+        return (ssize_t)want;
+    }
+    pthread_mutex_lock(&ra_lock);
+    while (copied < want) {
+        int hit = -1;
+        for (int i = 0; i < f->count; i++) {
+            int k = (f->first + i) % RA_SEGMENTS;
+            if (f->pos >= f->segments[k].start
+                    && f->pos < f->segments[k].start + f->segments[k].length) {
+                hit = k;
+                break;
+            }
+        }
+        if (hit < 0) {
+            // Not in the window: the reader jumped, or a segment failed.
+            ra_reset_window(f);
+            ssize_t n;
+            pthread_mutex_unlock(&ra_lock);
+            n = ra_pread(f->fd, buffer + copied, want - copied, f->pos);
+            if (n < 0) return copied > 0 ? (ssize_t)copied : -1;
+            f->pos += n;
+            f->sequential = 0;
+            copied += n;
+            pthread_mutex_lock(&ra_lock);
+            f->next_start = f->pos;
+            if (f->pos < f->size) ra_schedule(f);
+            break;
+        }
+        ra_segment *seg = &f->segments[hit];
+        while (seg->state != RA_READY) {
+            pthread_cond_wait(&ra_done, &ra_lock);
+        }
+        f->cur_start = seg->start;
+        f->cur_end = seg->start + seg->length;
+        f->cur_segment = hit;
+        int64_t offset = f->pos - seg->start;
+        int64_t n = seg->length - offset;
+        if (n > want - copied) n = want - copied;
+        // Only this thread frees a segment, so it may copy without the lock.
+        pthread_mutex_unlock(&ra_lock);
+        memcpy(buffer + copied,
+            f->memory + (size_t)hit*RA_SEGMENT_BYTES + offset, (size_t)n);
+        pthread_mutex_lock(&ra_lock);
+        copied += n;
+        f->pos += n;
+        f->sequential += n;
+        // Free the segments the reader has passed, from the front.
+        while (f->count > 0) {
+            ra_segment *front = &f->segments[f->first];
+            if (front->state != RA_READY
+                    || f->pos < front->start + front->length) {
+                break;
+            }
+            front->state = RA_FREE;
+            f->first = (f->first + 1) % RA_SEGMENTS;
+            f->count--;
+        }
+        ra_schedule(f);
+    }
+    pthread_mutex_unlock(&ra_lock);
+    return (ssize_t)copied;
+}
+
+static int ra_seek(void *cookie, off64_t *offset, int whence)
+{
+    ra_file *f = (ra_file*)cookie;
+    int64_t target;
+    if (whence == SEEK_SET) target = *offset;
+    else if (whence == SEEK_CUR) target = f->pos + *offset;
+    else if (whence == SEEK_END) target = f->size + *offset;
+    else return -1;
+    if (target < 0) return -1;
+    f->pos = target;
+    *offset = target;
+    return 0;
+}
+
+static int ra_close(void *cookie)
+{
+    ra_file *f = (ra_file*)cookie;
+    ra_unregister(f);
+    if (f->active) {
+        pthread_mutex_lock(&ra_lock);
+        ra_reset_window(f);
+        for (int j = 0; j < RA_MAX_FILES; j++) {
+            if (ra_files[j] == f) ra_files[j] = NULL;
+        }
+        char *memory = f->memory;
+        if (!ra_spare) {
+            ra_spare = memory;
+            memory = NULL;
+        }
+        pthread_mutex_unlock(&ra_lock);
+        if (memory) munmap(memory, (size_t)RA_SEGMENTS*RA_SEGMENT_BYTES);
+    }
+    close(f->fd);
+    internal_free(f);
+    return 0;
+}
+
+// Opens the regular file `name` for reading through a read-ahead window, or
+// returns NULL (the caller opens it with fopen).
+static FILE *open_read_ahead(const char *name)
+{
+    int fd = open(name, O_RDONLY);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)
+            || st.st_size < 4*RA_SEGMENT_BYTES) {
+        close(fd);
+        return NULL;
+    }
+    ra_file *f = (ra_file*)internal_calloc(1, sizeof(ra_file));
+    if (!f) {
+        close(fd);
+        return NULL;
+    }
+    f->fd = fd;
+    f->size = st.st_size;
+    cookie_io_functions_t functions = {ra_read, NULL, ra_seek, ra_close};
+    FILE *fp = fopencookie(f, "r", functions);
+    if (!fp) {
+        ra_close(f);
+        return NULL;
+    }
+    f->fp = fp;
+    ra_register(f);
+    return fp;
+}
+#endif
+
+
 LFORTRAN_API int64_t
 _lfortran_open(int32_t unit_num,
                char* f_name,
@@ -9257,7 +10047,14 @@ _lfortran_open(int32_t unit_num,
             internal_free(pad_c);
             return (int64_t) already_open;
         }
-        FILE* fd = fopen(f_name_c, access_mode);
+        FILE* fd = NULL;
+#ifdef LFORTRAN_READAHEAD
+        if (access_id == 1 && read_access && !write_access
+                && strcmp(access_mode, "r+") == 0) {
+            fd = open_read_ahead(f_name_c);
+        }
+#endif
+        if (!fd) fd = fopen(f_name_c, access_mode);
         if (!fd) {
             if (iostat == NULL) {
                 printf("Runtime error: Error in opening the file!\n");
@@ -12937,6 +13734,592 @@ LFORTRAN_API void _lfortran_read_array_complex_double(struct _lfortran_complex_6
     }
 }
 
+
+// Reading binary128 values: the token is parsed with lf_float128_from_str.
+static lf_float128 lf_strtof128(const char *s, char **endptr)
+{
+    const char *q = s;
+    while (isspace((unsigned char)*q)) q++;
+    const char *start = q;
+    if (*q == '+' || *q == '-') q++;
+    while (isdigit((unsigned char)*q) || *q == '.') q++;
+    if (q > start && (*q == 'e' || *q == 'E' || *q == 'd' || *q == 'D' ||
+            *q == 'q' || *q == 'Q')) {
+        const char *e = q + 1;
+        if (*e == '+' || *e == '-') e++;
+        if (isdigit((unsigned char)*e)) {
+            while (isdigit((unsigned char)*e)) e++;
+            q = e;
+        }
+    }
+    if (q == start) {
+        if (endptr) *endptr = (char*)s;
+        return lf_f128_from_double(0.0);
+    }
+    char token[128];
+    size_t n = (size_t)(q - start);
+    if (n >= sizeof(token)) n = sizeof(token) - 1;
+    memcpy(token, start, n);
+    token[n] = '\0';
+    if (endptr) *endptr = (char*)q;
+    return lf_float128_from_str(token);
+}
+
+static bool parse_fortran_f128(const char *buffer, lf_float128 *val)
+{
+    char *end;
+    lf_float128 v = lf_strtof128(buffer, &end);
+    if (end == buffer) return false;
+    while (isspace((unsigned char)*end)) end++;
+    if (*end != '\0') return false;
+    *val = v;
+    return true;
+}
+
+static int lf_scan_f128(FILE *filep, lf_float128 *val)
+{
+    char token[100];
+    if (input_scan(filep, "%99s", token) != 1) return 0;
+    char *end;
+    *val = lf_strtof128(token, &end);
+    return end != token;
+}
+
+LFORTRAN_API void _lfortran_read_float128(lf_float128 *p, int32_t unit_num, int32_t *iostat)
+{
+    int dmode = _lfortran_get_decimal_mode(unit_num);
+    char lsep = list_directed_separator(unit_num);
+    if (iostat) *iostat = 0;
+
+    if (unit_num == -1) {
+        // Read as string to handle Fortran D exponent notation
+        char buffer[100];
+        if (!read_stdin_list_directed_token(stdin, buffer, sizeof(buffer), iostat)) {
+            if (iostat) return;
+            fprintf(stderr, "Error: Failed to read double from stdin.\n");
+            exit(1);
+        }
+        normalize_numeric_input(buffer, dmode);
+        if (!parse_fortran_f128(buffer, p)) {
+            if (iostat) { *iostat = 1; return; }
+            fprintf(stderr, "Error: Invalid input from stdin.\n");
+            exit(1);
+        }
+        return;
+    }
+
+    bool unit_file_bin;
+    int access_mode;
+    bool read_access_flag = true;
+    FILE* filep = get_file_pointer_from_unit(unit_num, &unit_file_bin, &access_mode, &read_access_flag, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (filep && !read_access_flag) {
+        if (iostat) { *iostat = 5007; return; }
+        fprintf(stderr, "Runtime Error: Read access not permitted for unit %d.\n", unit_num);
+        exit(1);
+    }
+    if (!filep) {
+        if (iostat) { *iostat = 1; return; }
+        printf("No file found with given unit\n");
+        exit(1);
+    }
+
+    if (unit_file_bin) {
+        if (access_mode == 0) {
+            int rc = seq_unf_begin_record(unit_num, filep);
+            if (rc != 0) {
+                if (iostat) { *iostat = rc; return; }
+                fprintf(stderr, "Error: Failed to read record marker for double.\n");
+                exit(1);
+            }
+            if (find_unit(unit_num)->seq_unf_pending < (int32_t)sizeof(lf_float128)) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Record too short for double.\n");
+                exit(1);
+            }
+            if (unf_fread(p, sizeof(lf_float128), 1, filep, unit_num) != 1) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read double from sequential binary file.\n");
+                exit(1);
+            }
+            find_unit(unit_num)->seq_unf_pending -= (int32_t)sizeof(lf_float128);
+            if (seq_unf_finish_record(unit_num, filep) != 0) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid trailing record marker while reading double.\n");
+                exit(1);
+            }
+        } else {
+            if (unf_fread(p, sizeof(*p), 1, filep, unit_num) != 1) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read double from binary file.\n");
+                exit(1);
+            }
+        }
+    } else {
+        if (list_directed_check_null_repeat(unit_num)) {
+            return;
+        }
+        int c;
+        while ((c = input_getc(filep)) != EOF && isspace(c)) {}
+        if (c == EOF) {
+            if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+            fprintf(stderr, "Error: Failed to read double from file.\n");
+            exit(1);
+        }
+        // Leading comma = null value
+        if (c == lsep) {
+            return;
+        }
+        if (c == '/') {
+            input_ungetc(c, filep);
+            return;
+        }
+        char buffer[100];
+        int len = 0;
+        do {
+            if (len < 99) buffer[len++] = (char)c;
+            c = input_getc(filep);
+        } while (c != EOF && !isspace(c) && c != lsep && c != '/');
+        buffer[len] = '\0';
+        if (c == lsep) {
+            // Trailing comma consumed (separator for next value)
+        } else if (c != EOF) {
+            input_ungetc(c, filep);
+        }
+        int null_count = list_directed_parse_null_repeat(buffer);
+        if (null_count > 0) {
+            {
+                struct UNIT_FILE *uf_ = find_unit(unit_num);
+                if (uf_) uf_->lf_list_dir_null_remaining = null_count - 1;
+            }
+            return;
+        }
+        normalize_numeric_input(buffer, dmode);
+        if (!parse_fortran_f128(buffer, p)) {
+            if (iostat) { *iostat = 1; return; }
+            fprintf(stderr, "Error: Invalid input from file.\n");
+            exit(1);
+        }
+        // If we didn't consume a trailing comma in the loop, try now
+        if (c != lsep) {
+            skip_trailing_comma(filep, lsep);
+        }
+    }
+}
+
+LFORTRAN_API void _lfortran_read_array_float128(lf_float128 *p, int array_size, int32_t stride, int32_t unit_num, int32_t *iostat)
+{
+    int dmode = _lfortran_get_decimal_mode(unit_num);
+    if (iostat) *iostat = 0;
+    if (stride == 0) {
+        if (iostat) { *iostat = 1; return; }
+        fprintf(stderr, "Error: Invalid zero stride in double array read.\n");
+        exit(1);
+    }
+
+    char buffer[100];
+
+    if (unit_num == -1) {
+        use_stdin_char_mode();
+        for (int i = 0; i < array_size; i++) {
+            if (input_scan(stdin, "%99s", buffer) != 1) {
+                if (iostat) { *iostat = input_eof(stdin) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read double from stdin.\n");
+                exit(1);
+            }
+            lf_float128 val;
+            normalize_numeric_input(buffer, dmode);
+            if (!parse_fortran_f128(buffer, &val)) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid input from stdin.\n");
+                exit(1);
+            }
+            p[(int64_t)i * (int64_t)stride] = val;
+        }
+        return;
+    }
+
+    bool unit_file_bin;
+    int access_id;
+    bool read_access_flag = true;
+    FILE* filep = get_file_pointer_from_unit(unit_num, &unit_file_bin, &access_id, &read_access_flag, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (filep && !read_access_flag) {
+        if (iostat) { *iostat = 5007; return; }
+        fprintf(stderr, "Runtime Error: Read access not permitted for unit %d.\n", unit_num);
+        exit(1);
+    }
+    if (!filep) {
+        if (iostat) { *iostat = 1; return; }
+        printf("No file found with given unit\n");
+        exit(1);
+    }
+
+    if (unit_file_bin) {
+        if (access_id == 0) {
+            int rc = seq_unf_begin_record(unit_num, filep);
+            if (rc != 0) {
+                if (iostat) { *iostat = rc; return; }
+                fprintf(stderr, "Error: Failed to read record marker for double array.\n");
+                exit(1);
+            }
+            int32_t bytes_needed = (int32_t)(array_size * sizeof(lf_float128));
+            if (find_unit(unit_num)->seq_unf_pending < bytes_needed) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Record too short for double array.\n");
+                exit(1);
+            }
+            if (stride == 1) {
+                if (unf_fread(p, sizeof(lf_float128), array_size, filep, unit_num) != (size_t)array_size) {
+                    if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                    fprintf(stderr, "Error: Failed to read double array from binary file.\n");
+                    exit(1);
+                }
+            } else {
+                for (int i = 0; i < array_size; i++) {
+                    lf_float128 val;
+                    if (unf_fread(&val, sizeof(lf_float128), 1, filep, unit_num) != 1) {
+                        if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                        fprintf(stderr, "Error: Failed to read double from binary file.\n");
+                        exit(1);
+                    }
+                    p[(int64_t)i * (int64_t)stride] = val;
+                }
+            }
+            find_unit(unit_num)->seq_unf_pending -= bytes_needed;
+            if (seq_unf_finish_record(unit_num, filep) != 0) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid trailing record marker in double array read.\n");
+                exit(1);
+            }
+        } else {
+            if (stride == 1) {
+                if (unf_fread(p, sizeof(lf_float128), array_size, filep, unit_num) != (size_t)array_size) {
+                    if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                    fprintf(stderr, "Error: Failed to read double array from binary file.\n");
+                    exit(1);
+                }
+            } else {
+                for (int i = 0; i < array_size; i++) {
+                    lf_float128 val;
+                    if (unf_fread(&val, sizeof(lf_float128), 1, filep, unit_num) != 1) {
+                        if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                        fprintf(stderr, "Error: Failed to read double from binary file.\n");
+                        exit(1);
+                    }
+                    p[(int64_t)i * (int64_t)stride] = val;
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < array_size; i++) {
+            if (input_scan(filep, "%99s", buffer) != 1) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read double from file.\n");
+                exit(1);
+            }
+            lf_float128 val;
+            normalize_numeric_input(buffer, dmode);
+            if (!parse_fortran_f128(buffer, &val)) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid input from file.\n");
+                exit(1);
+            }
+            p[(int64_t)i * (int64_t)stride] = val;
+        }
+    }
+}
+
+LFORTRAN_API void _lfortran_read_complex_float128(struct _lfortran_complex_128 *p, int32_t unit_num, int32_t *iostat)
+{
+    int dmode = _lfortran_get_decimal_mode(unit_num);
+    char lsep = list_directed_separator(unit_num);
+    if (iostat) *iostat = 0;
+
+    if (unit_num == -1) {
+        use_stdin_char_mode();
+        char buf_re[100], buf_im[100];
+        if (input_scan(stdin, "%99s %99s", buf_re, buf_im) != 2) {
+            if (iostat) { *iostat = input_eof(stdin) ? -1 : 1; return; }
+            fprintf(stderr, "Error: Failed to read complex double from stdin.\n");
+            exit(1);
+        }
+        convert_fortran_d_exponent(buf_re);
+        normalize_numeric_input(buf_re, dmode);
+        convert_fortran_d_exponent(buf_im);
+        normalize_numeric_input(buf_im, dmode);
+        p->re = lf_strtof128(buf_re, NULL);
+        p->im = lf_strtof128(buf_im, NULL);
+        return;
+    }
+
+    bool unit_file_bin;
+    int access_mode;
+    bool read_access_flag = true;
+    FILE* filep = get_file_pointer_from_unit(unit_num, &unit_file_bin, &access_mode, &read_access_flag, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (filep && !read_access_flag) {
+        if (iostat) { *iostat = 5007; return; }
+        fprintf(stderr, "Runtime Error: Read access not permitted for unit %d.\n", unit_num);
+        exit(1);
+    }
+    if (!filep) {
+        if (iostat) { *iostat = 1; return; }
+        printf("No file found with given unit\n");
+        exit(1);
+    }
+
+    if (unit_file_bin) {
+        if (access_mode == 0) {
+            int rc = seq_unf_begin_record(unit_num, filep);
+            if (rc != 0) {
+                if (iostat) { *iostat = rc; return; }
+                fprintf(stderr, "Error: Failed to read record marker for complex double.\n");
+                exit(1);
+            }
+            if (find_unit(unit_num)->seq_unf_pending < (int32_t)sizeof(struct _lfortran_complex_128)) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Record too short for complex double.\n");
+                exit(1);
+            }
+            if (unf_fread(p, sizeof(lf_float128), 2, filep, unit_num) != 2) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read complex double from sequential binary file.\n");
+                exit(1);
+            }
+            find_unit(unit_num)->seq_unf_pending -= (int32_t)sizeof(struct _lfortran_complex_128);
+            if (seq_unf_finish_record(unit_num, filep) != 0) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid trailing record marker while reading complex double.\n");
+                exit(1);
+            }
+        } else {
+            if (unf_fread(p, sizeof(lf_float128), 2, filep, unit_num) != 2) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read complex double from binary file.\n");
+                exit(1);
+            }
+        }
+    } else {
+        if (list_directed_check_null_repeat(unit_num)) {
+            return;
+        }
+        char buffer[200];
+        int rc = read_complex_expr(filep, buffer, sizeof(buffer));
+        if (rc == -1) {
+            return;
+        }
+        if (rc == 0) {
+            if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+            fprintf(stderr, "Error: Invalid input for complex double from file.\n");
+            exit(1);
+        }
+        int null_count = list_directed_parse_null_repeat(buffer);
+        if (null_count > 0) {
+            {
+                struct UNIT_FILE *uf_ = find_unit(unit_num);
+                if (uf_) uf_->lf_list_dir_null_remaining = null_count - 1;
+            }
+            return;
+        }
+        convert_fortran_d_exponent(buffer);
+        normalize_numeric_input(buffer, dmode);
+        char *start = strchr(buffer, '(');
+        char *end = strchr(buffer, ')');
+        if (start && end && end > start) {
+            *end = '\0';
+            start++;
+            char *comma = strchr(start, ',');
+            if (comma) {
+                *comma = '\0';
+                while (isspace((unsigned char)*start)) start++;
+                char *endptr_re;
+                p->re = lf_strtof128(start, &endptr_re);
+                while (isspace((unsigned char)*endptr_re)) endptr_re++;
+                char *im_start = comma + 1;
+                while (isspace((unsigned char)*im_start)) im_start++;
+                char *endptr_im;
+                p->im = lf_strtof128(im_start, &endptr_im);
+            } else {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid complex double format '%s'.\n", buffer);
+                exit(1);
+            }
+        } else {
+            p->re = lf_strtof128(buffer, NULL);
+            if (lf_scan_f128(filep, &p->im) != 1) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read imaginary part of complex double.\n");
+                exit(1);
+            }
+        }
+        skip_trailing_comma(filep, lsep);
+    }
+}
+
+LFORTRAN_API void _lfortran_read_array_complex_float128(struct _lfortran_complex_128 *p, int array_size, int32_t stride, int32_t unit_num, int32_t *iostat)
+{
+    int dmode = _lfortran_get_decimal_mode(unit_num);
+    if (iostat) *iostat = 0;
+    if (stride == 0) {
+        if (iostat) { *iostat = 1; return; }
+        fprintf(stderr, "Error: Invalid zero stride in complex(double) array read.\n");
+        exit(1);
+    }
+
+    char buf_re[100], buf_im[100];
+
+    if (unit_num == -1) {
+        use_stdin_char_mode();
+        for (int i = 0; i < array_size; i++) {
+            if (input_scan(stdin, "%99s %99s", buf_re, buf_im) != 2) {
+                if (iostat) { *iostat = input_eof(stdin) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Failed to read complex double from stdin.\n");
+                exit(1);
+            }
+            convert_fortran_d_exponent(buf_re);
+            normalize_numeric_input(buf_re, dmode);
+            convert_fortran_d_exponent(buf_im);
+            normalize_numeric_input(buf_im, dmode);
+            p[(int64_t)i * (int64_t)stride].re = lf_strtof128(buf_re, NULL);
+            p[(int64_t)i * (int64_t)stride].im = lf_strtof128(buf_im, NULL);
+        }
+        return;
+    }
+
+    bool unit_file_bin;
+    int access_id;
+    bool read_access_flag = true;
+    FILE* filep = get_file_pointer_from_unit(unit_num, &unit_file_bin, &access_id, &read_access_flag, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    if (filep && !read_access_flag) {
+        if (iostat) { *iostat = 5007; return; }
+        fprintf(stderr, "Runtime Error: Read access not permitted for unit %d.\n", unit_num);
+        exit(1);
+    }
+    if (!filep) {
+        if (iostat) { *iostat = 1; return; }
+        printf("No file found with given unit\n");
+        exit(1);
+    }
+
+    if (unit_file_bin) {
+        if (access_id == 0) {
+            int rc = seq_unf_begin_record(unit_num, filep);
+            if (rc != 0) {
+                if (iostat) { *iostat = rc; return; }
+                fprintf(stderr, "Error: Failed to read record marker for complex double array.\n");
+                exit(1);
+            }
+            int32_t bytes_needed = (int32_t)(array_size * sizeof(struct _lfortran_complex_128));
+            if (find_unit(unit_num)->seq_unf_pending < bytes_needed) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Record too short for complex double array.\n");
+                exit(1);
+            }
+            if (stride == 1) {
+                if (unf_fread(p, sizeof(lf_float128), 2 * (size_t)array_size, filep, unit_num) != 2 * (size_t)array_size) {
+                    if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                    fprintf(stderr, "Error: Failed to read complex double array from binary file.\n");
+                    exit(1);
+                }
+            } else {
+                for (int i = 0; i < array_size; i++) {
+                    struct _lfortran_complex_128 val;
+                    if (unf_fread(&val, sizeof(lf_float128), 2, filep, unit_num) != 2) {
+                        if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                        fprintf(stderr, "Error: Failed to read complex double from binary file.\n");
+                        exit(1);
+                    }
+                    p[(int64_t)i * (int64_t)stride] = val;
+                }
+            }
+            find_unit(unit_num)->seq_unf_pending -= bytes_needed;
+            if (seq_unf_finish_record(unit_num, filep) != 0) {
+                if (iostat) { *iostat = 1; return; }
+                fprintf(stderr, "Error: Invalid trailing record marker in complex double array read.\n");
+                exit(1);
+            }
+        } else {
+            if (stride == 1) {
+                if (unf_fread(p, sizeof(lf_float128), 2 * (size_t)array_size, filep, unit_num) != 2 * (size_t)array_size) {
+                    if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                    fprintf(stderr, "Error: Failed to read complex double array from binary file.\n");
+                    exit(1);
+                }
+            } else {
+                for (int i = 0; i < array_size; i++) {
+                    struct _lfortran_complex_128 val;
+                    if (unf_fread(&val, sizeof(lf_float128), 2, filep, unit_num) != 2) {
+                        if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                        fprintf(stderr, "Error: Failed to read complex double from binary file.\n");
+                        exit(1);
+                    }
+                    p[(int64_t)i * (int64_t)stride] = val;
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < array_size;) {
+            char buffer[200];
+            int rc = read_complex_expr(filep, buffer, sizeof(buffer));
+            if (rc == -1) {
+                i++;
+                continue;
+            }
+            if (rc == 0) {
+                if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                fprintf(stderr, "Error: Invalid input for complex double from file.\n");
+                exit(1);
+            }
+            convert_fortran_d_exponent(buffer);
+            normalize_numeric_input(buffer, dmode);
+            struct _lfortran_complex_128 value;
+            int repeat_count = 1;
+            char *value_start = buffer;
+            char *star = strchr(buffer, '*');
+            bool has_repeat_count = star && star > buffer && star[1] == '(';
+            for (char *p_repeat = buffer; has_repeat_count && p_repeat < star; p_repeat++) {
+                has_repeat_count = isdigit((unsigned char)*p_repeat);
+            }
+            if (has_repeat_count) {
+                *star = '\0';
+                repeat_count = atoi(buffer);
+                value_start = star + 1;
+            }
+            char *start = strchr(value_start, '(');
+            char *end = strchr(value_start, ')');
+            if (start && end && end > start) {
+                *end = '\0';
+                start++;
+                char *comma = strchr(start, ',');
+                if (comma) {
+                    *comma = '\0';
+                    while (isspace((unsigned char)*start)) start++;
+                    char *endptr_re;
+                    value.re = lf_strtof128(start, &endptr_re);
+                    while (isspace((unsigned char)*endptr_re)) endptr_re++;
+                    char *im_start = comma + 1;
+                    while (isspace((unsigned char)*im_start)) im_start++;
+                    char *endptr_im;
+                    value.im = lf_strtof128(im_start, &endptr_im);
+                } else {
+                    if (iostat) { *iostat = 1; return; }
+                    fprintf(stderr, "Error: Invalid complex double format '%s'.\n", buffer);
+                    exit(1);
+                }
+            } else {
+                // No parentheses: treat as two whitespace-separated numbers
+                value.re = lf_strtof128(buffer, NULL);
+                if (input_scan(filep, "%lf", &value.im) != 1) {
+                    if (iostat) { *iostat = input_eof(filep) ? -1 : 1; return; }
+                    fprintf(stderr, "Error: Failed to read complex double from file.\n");
+                    exit(1);
+                }
+            }
+            for (int r = 0; r < repeat_count && i < array_size; r++, i++) {
+                p[(int64_t)i * (int64_t)stride] = value;
+            }
+        }
+    }
+}
+
 LFORTRAN_API void _lfortran_read_array_float(float *p, int array_size, int32_t stride, int32_t unit_num, int32_t *iostat)
 {
     int dmode = _lfortran_get_decimal_mode(unit_num);
@@ -13451,9 +14834,10 @@ static bool is_formatted_read_l_item(int32_t type_code)
     return is_formatted_read_logical(type_code) || is_formatted_read_integer(type_code);
 }
 
+// Type codes 14 (real(16)) and 15 (complex(16)) are binary128 items.
 static bool is_formatted_read_complex(int32_t type_code)
 {
-    return type_code == 6 || type_code == 7;
+    return type_code == 6 || type_code == 7 || type_code == 15;
 }
 
 // Items that the numeric edits (F/E/D/G and B/O/Z) read one number per
@@ -13461,7 +14845,8 @@ static bool is_formatted_read_complex(int32_t type_code)
 static bool is_formatted_read_numeric(int32_t type_code)
 {
     return is_formatted_read_integer(type_code)
-        || type_code == 4 || type_code == 5 || is_formatted_read_complex(type_code);
+        || type_code == 4 || type_code == 5 || type_code == 14
+        || is_formatted_read_complex(type_code);
 }
 
 // Storage size in bytes of one component of a numeric or logical item; 0 for
@@ -13475,6 +14860,7 @@ static size_t formatted_read_component_size(int32_t type_code)
         case 3: case 13: return sizeof(int64_t);
         case 4: case 6: return sizeof(float);
         case 5: case 7: return sizeof(double);
+        case 14: case 15: return sizeof(lf_float128);
         default: return 0;
     }
 }
@@ -13630,7 +15016,6 @@ static void parse_real_from_buffer(char* buffer, int field_len,
         }
     }
 
-    double v = strtod(buffer, NULL);
     int total_scale = 0;
     if (!has_decimal && decimal_places > 0) {
         total_scale += decimal_places;
@@ -13638,6 +15023,16 @@ static void parse_real_from_buffer(char* buffer, int field_len,
     if (!has_exponent) {
         total_scale += scale_factor;
     }
+    if (type_code == 14) {
+        lf_float128 v128 = lf_strtof128(buffer, NULL);
+        if (total_scale != 0) {
+            v128 = lf_f128_div(v128, lf_f128_pow(lf_f128_from_double(10.0),
+                lf_f128_from_double((double)total_scale)));
+        }
+        *((lf_float128*)real_ptr) = v128;
+        return;
+    }
+    double v = strtod(buffer, NULL);
     if (total_scale != 0) {
         v = v / pow(10.0, (double)total_scale);
     }
@@ -14134,7 +15529,7 @@ static bool start_array_read(ArrayReadCont *arr_cont, bool (*accepts)(int32_t),
     size_t component_sz = formatted_read_component_size(elem_tc);
     *arr_cont = (ArrayReadCont){0};
     arr_cont->data_ptr = data_ptr;
-    arr_cont->elem_tc = is_complex ? ((elem_tc == 6) ? 4 : 5) : elem_tc;
+    arr_cont->elem_tc = is_complex ? ((elem_tc == 6) ? 4 : (elem_tc == 15) ? 14 : 5) : elem_tc;
     arr_cont->n_elems = n_elems;
     arr_cont->rank = rank;
     arr_cont->extents = extents;
@@ -14624,9 +16019,10 @@ static bool handle_read_real(InputSource *inputSource, va_list *args, int width,
     }
     int32_t type_code = t.type_code;
     void* real_ptr = t.ptr;
-    bool is_complex = (type_code == 6 || type_code == 7);
+    bool is_complex = (type_code == 6 || type_code == 7 || type_code == 15);
     if (type_code == 6) type_code = 4;
     if (type_code == 7) type_code = 5;
+    if (type_code == 15) type_code = 14;
 
     if (!read_and_parse_real_field(inputSource, real_ptr, type_code,
             read_width, advance_no,
@@ -14635,7 +16031,9 @@ static bool handle_read_real(InputSource *inputSource, va_list *args, int width,
         return false;
     }
     if (is_complex) {
-        void* imag_ptr = (type_code == 4) ? (void*)((float*)real_ptr + 1) : (void*)((double*)real_ptr + 1);
+        void* imag_ptr = (type_code == 4) ? (void*)((float*)real_ptr + 1)
+            : (type_code == 14) ? (void*)((lf_float128*)real_ptr + 1)
+            : (void*)((double*)real_ptr + 1);
         if (!read_and_parse_real_field(inputSource, imag_ptr, type_code,
                 read_width, advance_no,
                 iostat, chunk, consumed_newline, pad_no,
@@ -16801,6 +18199,167 @@ LFORTRAN_API void _lfortran_string_read_c64_array(char *str, int64_t len, char *
         int rc = sscanf(buf + skip, " (%lf,%lf)%n", &elem->re, &elem->im, &n);
         internal_free(buf);
         if (rc != 2) {
+            break;
+        }
+        off += skip + n;
+        count++;
+    }
+    if (offset) *offset = off;
+    if (iostat) {
+        *iostat = (count < array_size) ? -1 : 0;
+    }
+}
+
+// Internal reads of binary128 values.
+static int string_read_f128_token(const char *s, lf_float128 *value, int *consumed)
+{
+    char *end;
+    lf_float128 v = lf_strtof128(s, &end);
+    if (end == s) {
+        *consumed = 0;
+        return 0;
+    }
+    *value = v;
+    *consumed = (int)(end - s);
+    return 1;
+}
+
+static bool string_read_f128_separator(char next)
+{
+    return next == '\0' || next == ' ' || next == '\t' || next == '\n'
+        || next == ',' || next == '/';
+}
+
+LFORTRAN_API void _lfortran_string_read_f128(char *str, int64_t len, char *format, lf_float128 *f, int32_t *iostat, int64_t *offset) {
+    (void)format;
+    int64_t off = offset ? *offset : 0;
+    char *buf = to_c_string((const fchar*)(str + off), len - off);
+    normalize_numeric_input(buf, _lfortran_get_decimal_mode(-1));
+    int rc = 0;
+    int skip = 0;
+    if (offset) {
+        /* Handle empty fields like: 1.5, , 2.5 */
+        if (_lfortran_skip_comma(buf, &skip, off, offset, iostat)) {
+            internal_free(buf);
+            return;
+        }
+    } else {
+        while (buf[skip] == ' ' || buf[skip] == '\t') skip++;
+    }
+    int consumed = 0;
+    lf_float128 tmp;
+    if (string_read_f128_token(buf + skip, &tmp, &consumed) &&
+            string_read_f128_separator(buf[skip + consumed])) {
+        *f = tmp;
+        if (offset) *offset = off + skip + consumed;
+        rc = 1;
+    }
+    internal_free(buf);
+    if (rc != 1) {
+        if (iostat) { *iostat = 5010; return; }
+        fprintf(stderr, "Error: Bad real for item in list input\n");
+        exit(1);
+    }
+    if (iostat) *iostat = 0;
+}
+
+LFORTRAN_API void _lfortran_string_read_f128_array(char *str, int64_t len, char *format,
+        lf_float128 *arr, int64_t array_size, int64_t stride, int32_t *iostat, int64_t *offset) {
+    (void)format;
+    int64_t off = string_read_array_start(len, offset);
+    char *buf = to_c_string((const fchar*)(str + off), len - off);
+    normalize_numeric_input(buf, _lfortran_get_decimal_mode(-1));
+    const char *pos = buf;
+    const char *end = buf + (len - off);
+    int64_t count = 0;
+    while (pos < end && count < array_size) {
+        while (pos < end && (isspace((unsigned char)*pos) || *pos == ',')) {
+            pos++;
+        }
+        if (pos >= end) break;
+        int consumed = 0;
+        lf_float128 value;
+        if (!string_read_f128_token(pos, &value, &consumed)) break;
+        arr[count * stride] = value;
+        count++;
+        pos += consumed;
+    }
+    if (offset) *offset = off + (pos - buf);
+    internal_free(buf);
+    if (iostat) *iostat = (count < array_size) ? -1 : 0;
+}
+
+// Parses " (re,im)" at the start of `s`; returns the number of characters
+// used, or 0 if `s` does not start with a complex number.
+static int string_read_c128_value(const char *s, struct _lfortran_complex_128 *c)
+{
+    const char *p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != '(') return 0;
+    p++;
+    int consumed = 0;
+    lf_float128 re, im;
+    if (!string_read_f128_token(p, &re, &consumed)) return 0;
+    p += consumed;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != ',') return 0;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!string_read_f128_token(p, &im, &consumed)) return 0;
+    p += consumed;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != ')') return 0;
+    p++;
+    c->re = re;
+    c->im = im;
+    return (int)(p - s);
+}
+
+LFORTRAN_API void _lfortran_string_read_c128(char *str, int64_t len, char *format, struct _lfortran_complex_128 *c, int32_t *iostat, int64_t *offset) {
+    (void)format;
+    int64_t off = offset ? *offset : 0;
+    char *buf = to_c_string((const fchar*)(str + off), len - off);
+    normalize_numeric_input(buf, _lfortran_get_decimal_mode(-1));
+    int skip = 0;
+    if (offset) {
+        while (buf[skip] && (buf[skip] == ' ' || buf[skip] == '\t' || buf[skip] == ',')) skip++;
+    }
+    int n = string_read_c128_value(buf + skip, c);
+    if (offset && n > 0) *offset = off + skip + n;
+    internal_free(buf);
+    if (n == 0) {
+        if (iostat) { *iostat = 5010; return; }
+        fprintf(stderr, "Error: Bad complex for item in list input\n");
+        exit(1);
+    }
+    if (iostat) *iostat = 0;
+}
+
+LFORTRAN_API void _lfortran_string_read_c128_array(char *str, int64_t len, char *format,
+        struct _lfortran_complex_128 *arr, int64_t array_size, int64_t stride,
+        int32_t *iostat, int64_t *offset) {
+    (void)format;
+    int64_t off = string_read_array_start(len, offset);
+    int64_t count = 0;
+    const char *end = str + len;
+    while (count < array_size && off < len) {
+        const char *peek = str + off;
+        while (peek < end && (isspace((unsigned char)*peek) || *peek == ',')) {
+            peek++;
+        }
+        if ((peek >= end) || (*peek == '/')) {
+            break;
+        }
+        char *buf = to_c_string((const fchar*)(str + off), len - off);
+        normalize_numeric_input(buf, _lfortran_get_decimal_mode(-1));
+        int skip = 0;
+        while (buf[skip]
+                && (buf[skip] == ' ' || buf[skip] == '\t' || buf[skip] == ',')) {
+            skip++;
+        }
+        int n = string_read_c128_value(buf + skip, &arr[count * stride]);
+        internal_free(buf);
+        if (n == 0) {
             break;
         }
         off += skip + n;

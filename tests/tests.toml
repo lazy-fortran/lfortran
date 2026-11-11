@@ -3673,6 +3673,22 @@ filename = "errors/wasm_pow_nonconst_real4.f90"
 wat = true
 
 [[test]]
+filename = "errors/wasm_pow_const_int4.f90"
+wat = true
+
+[[test]]
+filename = "errors/wasm_pow_const_int8.f90"
+wat = true
+
+[[test]]
+filename = "errors/wasm_pow_const_real4.f90"
+wat = true
+
+[[test]]
+filename = "errors/wasm_pow_const_real8.f90"
+wat = true
+
+[[test]]
 filename = "errors/write_internal_file_c.f90"
 c = true
 
@@ -5746,6 +5762,26 @@ gpu_cuda_kernel = true
 [[test]]
 filename = "../integration_tests/gpu_lanes_nested_01.f90"
 gpu_metal_kernel = true
+
+# On an NVIDIA GPU, the loops of an iteration whose iterations are
+# independent are shared out between the lanes too, after a reduction
+# and in an iteration with automatic arrays.
+[[test]]
+filename = "../integration_tests/gpu_lanes_independent_01.f90"
+gpu_cuda_kernel = true
+
+# On an NVIDIA GPU, the sum over the codes of a group of a quantized
+# matrix-vector product is shared out between 16 lanes, and a warp runs two
+# iterations.
+[[test]]
+filename = "../integration_tests/gpu_lanes_groups_01.f90"
+gpu_cuda_kernel = true
+
+# On an NVIDIA GPU, a launch of a few iterations gives each the lanes of a
+# whole block, which combine their values across warps in shared memory.
+[[test]]
+filename = "../integration_tests/gpu_lanes_block_02.f90"
+gpu_cuda_kernel = true
 
 # A loop in one branch of an `if` inside a loop, shared out between the
 # lanes.

@@ -93,7 +93,7 @@ struct MetalDialect {
     // then the lanes are the whole SIMD-group (emit_lane_prologue): 0 adds,
     // 1 multiplies, 2 takes the smallest, 3 the largest.
     std::string lane_reduce(const std::string &value, int op,
-            bool /*has_lanes*/) const {
+            bool /*has_lanes*/, bool /*block*/) const {
         static const char *names[] = {"simd_sum", "simd_product", "simd_min",
             "simd_max"};
         LCOMPILERS_ASSERT(op >= 0 && op < 4);
@@ -103,7 +103,8 @@ struct MetalDialect {
 
     // The value in the first lane of the iteration. With one lane per
     // iteration, that is the thread's own.
-    std::string lane_broadcast(const std::string &value) const {
+    std::string lane_broadcast(const std::string &value,
+            bool /*block*/) const {
         return "simd_shuffle(" + value
             + ", (ushort)(__gpu_simd_lane - (uint)__gpu_lane))";
     }
@@ -111,13 +112,14 @@ struct MetalDialect {
     // With one lane per iteration, the threads of a SIMD-group run
     // different iterations, which need not reach the same barriers.
     void emit_lane_barrier(std::stringstream &src, const std::string &indent,
-            const std::string &lanes) const {
+            const std::string &lanes, bool /*block*/) const {
         src << indent << "if (" << lanes << " > 1) simdgroup_barrier("
             "mem_flags::mem_device | mem_flags::mem_threadgroup);\n";
     }
 
     // Metal's short loops are unrolled in the ASR (gpu_sequential_unroll).
     std::string unroll_pragma(bool /*deep*/ = false) const { return ""; }
+    std::string unroll_few_pragma() const { return ""; }
 
     // Every real is single precision, so a literal needs no suffix to say
     // which precision it is.
@@ -130,6 +132,7 @@ struct MetalDialect {
     // divide up: the block is the whole grid and its index is zero.
     std::string thread_index() const { return "__thread_id"; }
     std::string global_thread_id() const { return "__thread_id"; }
+    std::string lane_global_thread_id() const { return "__thread_id"; }
     std::string block_index() const { return "0"; }
     std::string block_size() const { return "0"; }
 
