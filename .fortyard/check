@@ -4,8 +4,9 @@
 # runner keeps the work tree's build/ and its TMPDIR between checks, so the
 # pixi environments, the solved lock file, the build tree and sccache
 # persist. The reference tests run in full and the integration tests in
-# upstream's smoke selection, as in its Quick checks; the full suites and
-# the platform matrix run in GitHub Actions after each push to main.
+# upstream's smoke selection, as in its Quick checks; .fortyard/verify runs
+# the full integration suite on main. GitHub Actions is off for this fork, so
+# other LLVM versions and platforms are not checked here.
 set -eu
 jobs=${FY_CHECK_JOBS:-8}
 state=${TMPDIR:-/tmp}/lfortran-check
