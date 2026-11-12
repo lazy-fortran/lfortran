@@ -63,7 +63,10 @@ minutes. GitHub Actions run upstream's full workflows after each push to
 `main`, as advisory coverage of all platforms and LLVM versions.
 After each landing fortyard also verifies `main` with `.fortyard/verify`, the
 same check with all integration tests; a regression it finds is bisected to
-its commit and reported as an issue.
+its commit and reported as an issue. Both scripts run on Linux x86_64. They
+also support macOS arm64, where they have not yet been run. `FY_CHECK_LLVM`
+names another LLVM environment of `pixi.toml` (default `llvm11`); the
+reference tests need LLVM 11 and are skipped with any other.
 
 ## Syncing with upstream
 

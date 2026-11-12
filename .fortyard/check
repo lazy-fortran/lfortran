@@ -5,15 +5,23 @@
 # pixi environments, the solved lock file, the build tree and sccache
 # persist. The reference tests run in full and the integration tests in
 # upstream's smoke selection, as in its Quick checks; .fortyard/verify runs
-# the full integration suite on main. GitHub Actions is off for this fork, so
-# other LLVM versions and platforms are not checked here.
+# the full integration suite on main. It runs on Linux x86_64; macOS arm64
+# is supported but has not yet been run. FY_CHECK_LLVM selects another LLVM
+# environment of pixi.toml (default llvm11); the reference tests need LLVM 11
+# and run only there.
 set -eu
 jobs=${FY_CHECK_JOBS:-8}
+env=${FY_CHECK_LLVM:-llvm11}
 state=${TMPDIR:-/tmp}/lfortran-check
 pixi_version=0.83.0
+case $(uname -s)-$(uname -m) in
+    Linux-x86_64) pixi_target=x86_64-unknown-linux-musl ;;
+    Darwin-arm64) pixi_target=aarch64-apple-darwin ;;
+    *) echo "no pixi for $(uname -s) $(uname -m)" >&2; exit 1 ;;
+esac
 mkdir -p "$state/bin"
 if [ "$("$state/bin/pixi" --version 2>/dev/null)" != "pixi $pixi_version" ]; then
-    curl -fsSL "https://github.com/prefix-dev/pixi/releases/download/v$pixi_version/pixi-x86_64-unknown-linux-musl.tar.gz" |
+    curl -fsSL "https://github.com/prefix-dev/pixi/releases/download/v$pixi_version/pixi-$pixi_target.tar.gz" |
         tar -xz -C "$state/bin" pixi
 fi
 export PATH="$state/bin:$PATH" PIXI_HOME="$state/pixi-home" PIXI_CACHE_DIR="$state/pixi-cache"
@@ -21,25 +29,51 @@ export SCCACHE_DIR="$state/sccache" SCCACHE_CACHE_SIZE=20G
 # Environments live outside the work tree, which the runner cleans.
 pixi config set --global detached-environments "$state/pixi-envs" >/dev/null
 # pixi.lock is not tracked upstream; the solve is reused while pixi.toml is
-# unchanged.
-key=$(sha256sum pixi.toml | cut -c1-16)
+# unchanged. macOS has shasum but not always sha256sum.
+if command -v sha256sum >/dev/null; then
+    key=$(sha256sum pixi.toml | cut -c1-16)
+else
+    key=$(shasum -a 256 pixi.toml | cut -c1-16)
+fi
 [ -f "$state/pixi.lock.$key" ] && cp "$state/pixi.lock.$key" pixi.lock
 run() {
     log=$state/$1.log
     shift
     "$@" > "$log" 2>&1 || { tail -40 "$log"; exit 1; }
 }
-run build pixi run -e llvm11 build \
-    -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+# The build tree's CMake cache holds absolute paths into $state, so a
+# build tree configured against another state directory is started anew.
+build=build/$env
+if [ "$(cat "$build/.fortyard-state" 2>/dev/null)" != "$state" ]; then
+    rm -rf "$build"
+    mkdir -p "$build"
+    echo "$state" > "$build/.fortyard-state"
+fi
+# sccache compiles through a server on 127.0.0.1, which a sandbox may forbid
+# (fortyard's Mac runners); then the build runs without it.
+printf 'int main(void) { return 0; }\n' > "$state/sccache-probe.c"
+if pixi run -e "$env" sccache cc -c "$state/sccache-probe.c" \
+    -o "$state/sccache-probe.o" > "$state/sccache-probe.log" 2>&1; then
+    launcher=sccache
+else
+    launcher=
+    echo "sccache cannot start its server; building without it"
+fi
+run build pixi run -e "$env" build \
+    -DCMAKE_C_COMPILER_LAUNCHER=$launcher -DCMAKE_CXX_COMPILER_LAUNCHER=$launcher
 cp pixi.lock "$state/pixi.lock.$key"
-echo "build passed"
-run tests pixi run -e llvm11 tests -j "$jobs"
-echo "reference tests passed"
+echo "build ($env) passed"
+if [ "$env" = llvm11 ]; then
+    run tests pixi run -e "$env" tests -j "$jobs"
+    echo "reference tests passed"
+else
+    echo "reference tests skipped (they need llvm11)"
+fi
 # Landings run upstream's smoke selection; .fortyard/verify runs them all.
 if [ "${FY_CHECK_INTEGRATION:-smoke}" = full ]; then
-    run integration pixi run -e llvm11 integration_tests -b llvm -j "$jobs"
+    run integration pixi run -e "$env" integration_tests -b llvm -j "$jobs"
     echo "integration tests (LLVM, all) passed"
 else
-    run integration pixi run -e llvm11 integration_tests -b llvm --smoke -j "$jobs"
+    run integration pixi run -e "$env" integration_tests -b llvm --smoke -j "$jobs"
     echo "integration tests (LLVM, smoke selection) passed"
 fi
