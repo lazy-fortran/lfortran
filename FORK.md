@@ -42,6 +42,7 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
 | lfortran/lfortran#16375 | name the type in the wasm backend's power diagnostic (on #16370) |
 | lfortran/lfortran#16376 | parse bare I/O statements in an interactive cell |
 | lfortran/lfortran#16377 | load libraries and module directories from a cell |
+| lfortran/lfortran#17762 | built-in LLD skips GCC directories of other systems (MinGW next to Linux GCC) |
 
 Fixes in `main` that have no upstream pull request yet: static storage for
 main program variables (bf4b95bcc1), the names a cell defines, uses and
