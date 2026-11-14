@@ -267,65 +267,6 @@
                                     []
                                     ()
                                 ),
-                            __libasr_extent_s_1:
-                                (Variable
-                                    5
-                                    __libasr_extent_s_1
-                                    [__dim_s_0]
-                                    Local
-                                    (IntrinsicElementalFunction
-                                        Max
-                                        [(IntegerConstant 0 (Integer 4) Decimal)
-                                        (Var 5 __dim_s_0)]
-                                        0
-                                        (Integer 4)
-                                        ()
-                                    )
-                                    ()
-                                    Default
-                                    (Integer 4)
-                                    ()
-                                    Source
-                                    Public
-                                    Required
-                                    .false.
-                                    .false.
-                                    .false.
-                                    ()
-                                    .false.
-                                    .false.
-                                    .false.
-                                    NotMethod
-                                    ()
-                                    []
-                                    ()
-                                ),
-                            __libasr_lbound_s_1:
-                                (Variable
-                                    5
-                                    __libasr_lbound_s_1
-                                    [__lb_s_0]
-                                    Local
-                                    (Var 5 __lb_s_0)
-                                    ()
-                                    Default
-                                    (Integer 4)
-                                    ()
-                                    Source
-                                    Public
-                                    Required
-                                    .false.
-                                    .false.
-                                    .false.
-                                    ()
-                                    .false.
-                                    .false.
-                                    .false.
-                                    NotMethod
-                                    ()
-                                    []
-                                    ()
-                                ),
                             __loop_end_0:
                                 (Variable
                                     5
@@ -590,16 +531,16 @@
                                 (Variable
                                     5
                                     s
-                                    [__libasr_lbound_s_1
-                                    __libasr_extent_s_1]
+                                    [__lb_s_0
+                                    __dim_s_0]
                                     InOut
                                     ()
                                     ()
                                     Default
                                     (Array
                                         (Integer 4)
-                                        [((Var 5 __libasr_lbound_s_1)
-                                        (Var 5 __libasr_extent_s_1))]
+                                        [((Var 5 __lb_s_0)
+                                        (Var 5 __dim_s_0))]
                                         DescriptorArray
                                         Global
                                     )
@@ -4297,6 +4238,13 @@
                             .false.
                             .false.
                         )
+                        (SubroutineCall
+                            1 lfortran_gpu_begin_host_allocations
+                            1 lfortran_gpu_begin_host_allocations
+                            []
+                            ()
+                            .false.
+                        )
                         (Allocate
                             [((Var 2 __gpu_red_s)
                             [((IntegerConstant 1 (Integer 8) Decimal)
@@ -4308,6 +4256,13 @@
                             ()
                             ()
                             ()
+                        )
+                        (SubroutineCall
+                            1 lfortran_gpu_end_host_allocations
+                            1 lfortran_gpu_end_host_allocations
+                            []
+                            ()
+                            .false.
                         )
                         (GpuKernelLaunch
                             1 __lfortran_gpu_kernel_0_13gpu_metal_702
@@ -4405,6 +4360,70 @@
                             ()
                         )
                     )]
+                    ()
+                ),
+            lfortran_gpu_begin_host_allocations:
+                (Function
+                    (SymbolTable
+                        6
+                        {
+                            
+                        })
+                    lfortran_gpu_begin_host_allocations
+                    (FunctionType
+                        []
+                        ()
+                        BindC
+                        Interface
+                        "lfortran_gpu_begin_host_allocations"
+                        .false.
+                        .false.
+                        .false.
+                        .false.
+                        .false.
+                        []
+                        .false.
+                        Host
+                    )
+                    []
+                    []
+                    []
+                    ()
+                    Public
+                    .false.
+                    .false.
+                    ()
+                ),
+            lfortran_gpu_end_host_allocations:
+                (Function
+                    (SymbolTable
+                        7
+                        {
+                            
+                        })
+                    lfortran_gpu_end_host_allocations
+                    (FunctionType
+                        []
+                        ()
+                        BindC
+                        Interface
+                        "lfortran_gpu_end_host_allocations"
+                        .false.
+                        .false.
+                        .false.
+                        .false.
+                        .false.
+                        []
+                        .false.
+                        Host
+                    )
+                    []
+                    []
+                    []
+                    ()
+                    Public
+                    .false.
+                    .false.
                     ()
                 )
         })

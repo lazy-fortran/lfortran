@@ -27,6 +27,30 @@ namespace LCompilers::LFortran {
 class BodyVisitor : public CommonVisitor<BodyVisitor> {
 private:
 
+    // A normal RETURN leaves the alternate-return specifier at 0. The dummy
+    // is intent(out), so the caller's slot is undefined until the procedure
+    // writes it. Without this store, a caller that takes the normal return
+    // reads an uninitialized value and can take an alternate branch.
+    void zero_alternate_return(Vec<ASR::stmt_t*> &body, const Location &loc) {
+        ASR::symbol_t *alt = current_scope->get_symbol("__lfortran_alt_ret");
+        if (alt == nullptr) {
+            return;
+        }
+        ASR::expr_t *var = ASRUtils::EXPR(ASR::make_Var_t(al, loc, alt));
+        ASR::ttype_t *int_type = ASRUtils::expr_type(var);
+        ASR::expr_t *zero = ASRUtils::EXPR(ASR::make_IntegerConstant_t(
+            al, loc, 0, int_type));
+        ASR::stmt_t *assign = ASRUtils::STMT(ASR::make_Assignment_t(
+            al, loc, var, zero, nullptr, false, false, false, false));
+        Vec<ASR::stmt_t*> with_zero;
+        with_zero.reserve(al, body.size() + 1);
+        with_zero.push_back(al, assign);
+        for (size_t i = 0; i < body.size(); i++) {
+            with_zero.push_back(al, body[i]);
+        }
+        body.from_pointer_n_copy(al, with_zero.p, with_zero.n);
+    }
+
     // The Fortran standard allows the stop code to be a default integer,
     // but the runtime ABI expects a 32-bit (kind=4) integer. When
     // -fdefault-integer-8 is active, integer literals become kind=8.
@@ -786,7 +810,7 @@ public:
                 return;
             }
             std::string msym = to_lower(module_name);
-            if (msym == "ieee_arithmetic") {
+            if (msym == "ieee_arithmetic" || msym == "ieee_exceptions") {
                 msym = "lfortran_intrinsic_" + msym;
             }
             SymbolTable *tu = scope->get_tu_scope();
@@ -5094,12 +5118,32 @@ public:
                     ASR::dimension_t *var_dims;
                     ASRUtils::extract_dimensions_from_ttype(base_type, var_dims);
                     Vec<ASR::dimension_t> tmp_dims; tmp_dims.reserve(al, 1);
+                    bool has_vector_subscript = false;
                     for ( size_t i = 0; i < tmp_array_section->n_args; i++ ) {
-                        if (tmp_array_section->m_args[i].m_left) {
+                        // A triplet has its lower bound filled in. A vector
+                        // subscript has no bounds and an array index, and it
+                        // contributes one dimension of the section (F2018
+                        // 9.5.3.1), the same way a triplet does.
+                        ASR::expr_t* subscript = tmp_array_section->m_args[i].m_right;
+                        bool vector_subscript = tmp_array_section->m_args[i].m_left == nullptr
+                            && tmp_array_section->m_args[i].m_step == nullptr
+                            && subscript != nullptr
+                            && ASRUtils::is_array(ASRUtils::expr_type(subscript));
+                        if (tmp_array_section->m_args[i].m_left || vector_subscript) {
                             tmp_dims.push_back(al, var_dims[i]);
                         }
+                        has_vector_subscript = has_vector_subscript || vector_subscript;
                     }
                     tmp_type = ASRUtils::duplicate_type(al, base_type, &tmp_dims);
+                    if (has_vector_subscript) {
+                        // A vector subscript is not a regular strided section,
+                        // so the associate name cannot share the base
+                        // descriptor. Copy the selected elements into an
+                        // allocatable of the section's rank. Its shape is
+                        // fixed when the selector is evaluated.
+                        create_associate_stmt = false;
+                        tmp_type = ASRUtils::duplicate_type_with_empty_dims(al, tmp_type);
+                    }
                 } else if (ASR::is_a<ASR::ArrayItem_t>(*tmp_expr)) {
                     create_associate_stmt = !selector_is_constant;
                 } else if (ASR::is_a<ASR::ArrayReshape_t>(*tmp_expr)) {
@@ -6337,6 +6381,7 @@ public:
                     assumed_rank_arrays[array_var_name] = rank;
                     Vec<ASR::stmt_t*> rank_body; rank_body.reserve(al, rank_expr->n_body);
                     if (x.m_assoc_name) {
+                        char* assoc_name = s2c(al, to_lower(x.m_assoc_name));
                         ASR::ttype_t* variable_type = ASRUtils::extract_type(selector_type);
                         ASR::ttype_t* desc_type = ASRUtils::create_array_type_with_empty_dims(al, rank, variable_type);
                         ASR::ttype_t* target_type = ASRUtils::make_Pointer_t_util(al, m_selector->base.loc, desc_type);
@@ -6345,10 +6390,10 @@ public:
                             type_decl = ASRUtils::get_struct_sym_from_struct_expr(m_selector);
                         }
                         ASR::symbol_t* assoc_sym = ASR::down_cast<ASR::symbol_t>(ASRUtils::make_Variable_t_util(al, x.base.base.loc, 
-                            current_scope, x.m_assoc_name, nullptr, 0, ASR::intentType::Local, 
+                            current_scope, assoc_name, nullptr, 0, ASR::intentType::Local, 
                             nullptr, nullptr, ASR::storage_typeType::Default, target_type, type_decl, 
                             ASR::abiType::Source, ASR::accessType::Public, ASR::presenceType::Required, false));
-                        current_scope->add_symbol(x.m_assoc_name, assoc_sym);
+                        current_scope->add_symbol(assoc_name, assoc_sym);
                         ASR::expr_t* assoc_var = ASRUtils::EXPR(ASR::make_Var_t(al, x.base.base.loc, assoc_sym));
                         ASR::expr_t* cast_expr = nullptr;
                         if (ASRUtils::is_class_type(variable_type) && rank == 0) {
@@ -6383,14 +6428,45 @@ public:
                 case AST::rank_stmtType::RankDefault: {
                     // rank default
                     // TODO: throw error if more than one default case statement is present
-                    SymbolTable* current_scope_copy = current_scope;
-                    current_scope = parent_scope;
                     AST::RankDefault_t* rank_default = AST::down_cast<AST::RankDefault_t>(x.m_body[i]);
                     if (!array_var_name.empty()) {
                         assumed_rank_arrays.erase(array_var_name);
                     }
-                    transform_stmts(select_rank_default, rank_default->n_body, rank_default->m_body);
-                    current_scope = current_scope_copy;
+                    if (!x.m_assoc_name) {
+                        current_scope = parent_scope;
+                        transform_stmts(select_rank_default, rank_default->n_body, rank_default->m_body);
+                        break;
+                    }
+                    // The associate name is an assumed-rank entity that
+                    // aliases the selector (F2018 11.1.10.3).
+                    ASR::ttype_t* target_type = ASRUtils::type_get_past_allocatable(selector_type);
+                    if (!ASR::is_a<ASR::Pointer_t>(*target_type)) {
+                        target_type = ASRUtils::make_Pointer_t_util(al, m_selector->base.loc, target_type);
+                    }
+                    ASR::symbol_t* type_decl = nullptr;
+                    if (ASR::is_a<ASR::StructType_t>(*ASRUtils::extract_type(selector_type))) {
+                        type_decl = ASRUtils::get_struct_sym_from_struct_expr(m_selector);
+                    }
+                    char* assoc_name = s2c(al, to_lower(x.m_assoc_name));
+                    ASR::symbol_t* assoc_sym = ASR::down_cast<ASR::symbol_t>(ASRUtils::make_Variable_t_util(al, x.base.base.loc,
+                        current_scope, assoc_name, nullptr, 0, ASR::intentType::Local,
+                        nullptr, nullptr, ASR::storage_typeType::Default, target_type, type_decl,
+                        ASR::abiType::Source, ASR::accessType::Public, ASR::presenceType::Required, false));
+                    current_scope->add_symbol(assoc_name, assoc_sym);
+                    Vec<ASR::stmt_t*> default_body; default_body.reserve(al, rank_default->n_body + 1);
+                    default_body.push_back(al, ASRUtils::STMT(ASRUtils::make_Associate_t_util(al, x.base.base.loc,
+                        ASRUtils::EXPR(ASR::make_Var_t(al, x.base.base.loc, assoc_sym)), m_selector)));
+                    std::string block_name = parent_scope->get_unique_name("~select_rank_block_");
+                    ASR::symbol_t* block_sym = ASR::down_cast<ASR::symbol_t>(ASR::make_Block_t(al,
+                        rank_default->base.base.loc, current_scope, s2c(al, block_name),
+                        nullptr, 0));
+                    ASR::Block_t* block_t = ASR::down_cast<ASR::Block_t>(block_sym);
+                    parent_scope->add_symbol(block_name, block_sym);
+                    transform_stmts(default_body, rank_default->n_body, rank_default->m_body);
+                    block_t->m_body = default_body.p;
+                    block_t->n_body = default_body.size();
+                    select_rank_default.push_back(al, ASRUtils::STMT(ASR::make_BlockCall_t(al,
+                        rank_default->base.base.loc, -1, block_sym)));
                     break;
                 }
 
@@ -6514,6 +6590,8 @@ public:
         select_type_default.reserve(al, 1);
         Vec<ASR::type_stmt_t*> select_type_body;
         select_type_body.reserve(al, x.n_body);
+        char* select_assoc_name = x.m_assoc_name ?
+            s2c(al, to_lower(x.m_assoc_name)) : nullptr;
         ASR::Variable_t* selector_variable = nullptr;
         ASR::ttype_t* selector_variable_type = nullptr;
         ASR::symbol_t* select_variable_m_type_declaration = nullptr;
@@ -6585,7 +6663,7 @@ public:
             current_scope = al.make_new<SymbolTable>(parent_scope);
             ASR::Variable_t* assoc_variable = nullptr;
             ASR::symbol_t* assoc_sym = nullptr;
-            bool need_shadow_assoc = (x.m_assoc_name != nullptr);
+            bool need_shadow_assoc = (select_assoc_name != nullptr);
             if (!need_shadow_assoc && selector_variable) {
                 ASR::ttype_t* sel_base = ASRUtils::type_get_past_allocatable(
                     ASRUtils::type_get_past_pointer(selector_variable->m_type));
@@ -6593,7 +6671,7 @@ public:
             }
             char* assoc_name = nullptr;
             if (need_shadow_assoc) {
-                assoc_name = x.m_assoc_name ? x.m_assoc_name :
+                assoc_name = select_assoc_name ? select_assoc_name :
                     (selector_variable ? selector_variable->m_name : nullptr);
             }
             if (assoc_name) {
@@ -7109,7 +7187,7 @@ public:
         }
 
         all_loops_blocks_nesting--;
-        tmp = ASR::make_SelectType_t(al, x.base.base.loc, m_selector, x.m_assoc_name,
+        tmp = ASR::make_SelectType_t(al, x.base.base.loc, m_selector, select_assoc_name,
                                      select_type_body.p, select_type_body.size(),
                                      select_type_default.p, select_type_default.size());
     }
@@ -7190,7 +7268,7 @@ public:
 
     void visit_Use(const AST::Use_t &x) {
         std::string msym = to_lower(x.m_module);
-        if (msym == "ieee_arithmetic") {
+        if (msym == "ieee_arithmetic" || msym == "ieee_exceptions") {
             msym = "lfortran_intrinsic_" + msym;
         }
         Str msym_c; msym_c.from_str_view(msym);
@@ -7900,6 +7978,7 @@ public:
             master_function_body.push_back(al, it);
         }
 
+        zero_alternate_return(master_function_body, loc);
         master_function->m_body = master_function_body.p;
         master_function->n_body = master_function_body.size();
         ElementalChecks::check_body(*master_function, diag, compiler_options);
@@ -8070,6 +8149,7 @@ public:
             func_deps.push_back(al, s2c(al, itr));
         }
         current_function_dependencies = current_function_dependencies_copy;
+        zero_alternate_return(body, x.base.base.loc);
         v->m_body = body.p;
         v->n_body = body.size();
         v->m_dependencies = func_deps.p;
@@ -9063,14 +9143,8 @@ public:
                         // ASRUtils::set_ArrayConstant_value(ac, arg, i);
                         args.push_back(al, arg);
                     }
-                    ASR::expr_t* constructor = ASRUtils::EXPR(ASRUtils::make_ArrayConstructor_t_util(al, ac->base.base.loc,
-                            args.p, args.n, ASRUtils::type_get_past_allocatable(ASRUtils::type_get_past_pointer(target_type)), ac->m_storage_format));
-                    if (ASRUtils::expr_value(constructor) == nullptr) {
-                        // The elements cannot be stored as the data of an
-                        // ArrayConstant (real(16), complex(16)).
-                        value = constructor;
-                    } else {
-                    ac = ASR::down_cast<ASR::ArrayConstant_t>(ASRUtils::expr_value(constructor));
+                    ac = ASR::down_cast<ASR::ArrayConstant_t>(ASRUtils::expr_value(ASRUtils::EXPR(ASRUtils::make_ArrayConstructor_t_util(al, ac->base.base.loc,
+                            args.p, args.n, ASRUtils::type_get_past_allocatable(ASRUtils::type_get_past_pointer(target_type)), ac->m_storage_format))));
                     value = ASRUtils::EXPR((ASR::asr_t*) ac);
                     LCOMPILERS_ASSERT(ASRUtils::is_array(ac->m_type));
                     if( ASR::is_a<ASR::Array_t>(*ASRUtils::type_get_past_pointer(
@@ -9079,7 +9153,6 @@ public:
                             ASRUtils::type_get_past_pointer(
                                 ASRUtils::type_get_past_allocatable(ac->m_type)));
                         array_t->m_type = ASRUtils::expr_type(ASRUtils::fetch_ArrayConstant_value(al, ac, 0));
-                    }
                     }
                 } else {
                     if (ASR::is_a<ASR::IntrinsicElementalFunction_t>(*value) &&

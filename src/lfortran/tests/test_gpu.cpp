@@ -2044,7 +2044,8 @@ public:
 // `name` when `module` is empty), or of its deferring twin, after the Metal
 // pipeline up to gpu_launch_sync.
 std::string gpu_sync_trace(const std::string &source,
-        const std::string &module, const std::string &name) {
+        const std::string &module, const std::string &name,
+        bool loaded_from_mod = false) {
     CompilerOptions options;
     options.gpu_backend = "metal";
     options.po.gpu_offload_metal = true;
@@ -2060,6 +2061,16 @@ std::string gpu_sync_trace(const std::string &source,
     INFO(diagnostics.render2());
     REQUIRE(parsed.ok);
     ASR::TranslationUnit_t &unit = *parsed.result;
+    if (loaded_from_mod) {
+        // As if the modules came from their module files, whose procedures
+        // this unit compiles (the default multi-file mode).
+        for (auto &item : unit.m_symtab->get_scope()) {
+            if (ASR::is_a<ASR::Module_t>(*item.second)) {
+                ASR::down_cast<ASR::Module_t>(item.second)
+                    ->m_loaded_from_mod = true;
+            }
+        }
+    }
     Allocator allocator(32 * 1024 * 1024);
     PassManager passes;
     std::string pass = "gpu_vector_lanes", skip;
@@ -2104,6 +2115,159 @@ std::string gpu_sync_trace(const std::string &source,
     return trace.trace;
 }
 
+}
+
+TEST_CASE("GPU twins of modules loaded from module files leave only their launches pending") {
+    // `project` launches on y and counts the call on the host: a caller that
+    // chains projections does not wait between them, whether the module is
+    // compiled in this unit or came from its module file.
+    const std::string source = R"(
+module sync_loaded
+implicit none
+type :: tally
+    integer :: calls = 0
+end type
+contains
+subroutine step(y)
+    real, intent(inout) :: y(:)
+    integer :: i
+    do concurrent (i = 1:size(y))
+        y(i) = y(i) + 1
+    end do
+end subroutine
+subroutine project(y, t)
+    real, intent(inout) :: y(:)
+    type(tally), intent(inout) :: t
+    call step(y)
+    t%calls = t%calls + 1
+end subroutine
+subroutine chain(a, b, t)
+    real, intent(inout) :: a(:), b(:)
+    type(tally), intent(inout) :: t
+    call project(a, t)
+    call project(b, t)
+end subroutine
+end module
+)";
+    CHECK(gpu_sync_trace(source, "sync_loaded", "chain") == "CC");
+    CHECK(gpu_sync_trace(source, "sync_loaded", "chain", true) == "CC");
+}
+
+TEST_CASE("GPU calls reach the locals a contained procedure names only when it can run elsewhere") {
+    // `show` reads the local w. While it is only called by name nothing but
+    // `by_name` runs it, so the call of the unrelated twin `bump` does not wait
+    // for the launch that writes w; once its name is handed to another
+    // procedure (`by_value`) that may call it, and the call of `bump` waits.
+    const std::string source = R"(
+module sync_frames
+implicit none
+contains
+subroutine bump(y)
+    real, intent(inout) :: y(:)
+    integer :: i
+    do concurrent (i = 1:size(y))
+        y(i) = y(i) + 1
+    end do
+end subroutine
+subroutine run(f)
+    interface
+        subroutine f()
+        end subroutine
+    end interface
+    call f()
+end subroutine
+subroutine by_name(b, r)
+    real, intent(inout) :: b(:)
+    real, intent(out) :: r
+    real :: w(64)
+    integer :: i
+    do concurrent (i = 1:64)
+        w(i) = i
+    end do
+    call bump(b)
+    call show()
+    r = w(2)
+contains
+    subroutine show()
+        if (w(1) /= 1.0) error stop "stale"
+    end subroutine
+end subroutine
+subroutine by_value(b, r)
+    real, intent(inout) :: b(:)
+    real, intent(out) :: r
+    real :: w(64)
+    integer :: i
+    do concurrent (i = 1:64)
+        w(i) = i
+    end do
+    call bump(b)
+    call run(show)
+    r = w(2)
+contains
+    subroutine show()
+        if (w(1) /= 1.0) error stop "stale"
+    end subroutine
+end subroutine
+end module
+)";
+    CHECK(gpu_sync_trace(source, "sync_frames", "by_name") == "[L|]CSC");
+    CHECK(gpu_sync_trace(source, "sync_frames", "by_value").substr(0, 5)
+        == "[L|]S");
+}
+
+TEST_CASE("GPU calls do not access the local targets nothing else names") {
+    // `a` is a target of a local pointer, which makes it aliasable, but the
+    // pointer is local: the call of the unrelated twin `bump` cannot reach
+    // `a`, so it does not wait for the launch that writes `a`. When the
+    // pointer is handed to a procedure that stores it (`publish`), a later
+    // call may access `a`, and the host waits.
+    const std::string source = R"(
+module sync_targets
+implicit none
+real, pointer :: shared(:) => null()
+contains
+subroutine bump(y)
+    real, intent(inout) :: y(:)
+    integer :: i
+    do concurrent (i = 1:size(y))
+        y(i) = y(i) + 1
+    end do
+end subroutine
+subroutine publish(x)
+    real, target, intent(in) :: x(:)
+    shared => x
+end subroutine
+subroutine local_only(b, r)
+    real, intent(inout) :: b(:)
+    real, intent(out) :: r
+    real, target :: a(64)
+    real, pointer :: p(:)
+    integer :: i
+    p => a(1:32)
+    do concurrent (i = 1:64)
+        a(i) = i
+    end do
+    call bump(b)
+    r = p(2)
+end subroutine
+subroutine published(b, r)
+    real, intent(inout) :: b(:)
+    real, intent(out) :: r
+    real, target :: a(64)
+    integer :: i
+    call publish(a)
+    do concurrent (i = 1:64)
+        a(i) = i
+    end do
+    call bump(b)
+    r = a(2)
+end subroutine
+end module
+)";
+    CHECK(gpu_sync_trace(source, "sync_targets", "local_only")
+        == "[L|]CS");
+    CHECK(gpu_sync_trace(source, "sync_targets", "published")
+        == "C[L|]SC");
 }
 
 TEST_CASE("GPU allocatable actuals of contiguous optional dummies are not synced") {
@@ -2557,6 +2721,308 @@ print *, s, y(1)
 end program
 )";
     CHECK(gpu_sync_trace(impure, "", "sync_impure_main") == "[L|]WS");
+}
+
+// GpuSync nodes in `body`.
+size_t count_gpu_syncs(ASR::stmt_t **body, size_t n_body) {
+    struct Count : public ASR::BaseWalkVisitor<Count> {
+        size_t n = 0;
+        void visit_GpuSync(const ASR::GpuSync_t &/*x*/) { n++; }
+    } count;
+    for (size_t i = 0; i < n_body; i++) count.visit_stmt(*body[i]);
+    return count.n;
+}
+
+// GpuSync nodes inside a host do-loop of `fn` (one CG iteration, not the
+// sync a procedure may still need when it returns).
+size_t count_loop_syncs(ASR::Function_t *fn) {
+    struct Count : public ASR::BaseWalkVisitor<Count> {
+        int depth = 0;
+        size_t n = 0;
+        void visit_DoLoop(const ASR::DoLoop_t &x) {
+            depth++;
+            for (size_t i = 0; i < x.n_body; i++) visit_stmt(*x.m_body[i]);
+            depth--;
+            for (size_t i = 0; i < x.n_orelse; i++) visit_stmt(*x.m_orelse[i]);
+        }
+        void visit_GpuSync(const ASR::GpuSync_t &/*x*/) {
+            if (depth > 0) n++;
+        }
+    } count;
+    for (size_t i = 0; i < fn->n_body; i++) count.visit_stmt(*fn->m_body[i]);
+    return count.n;
+}
+
+// The deferring twin of an external procedure when gpu_launch_sync made
+// one, otherwise the procedure itself. `pass_array_by_data` may have
+// renamed it to `<name>_<signature>`.
+ASR::Function_t *external_body(SymbolTable *scope, const std::string &name) {
+    ASR::symbol_t *sym = nullptr;
+    std::string found;
+    for (auto &item : scope->get_scope()) {
+        if (!ASR::is_a<ASR::Function_t>(*item.second)) continue;
+        if (item.first.find("__gpu_deferred") != std::string::npos) continue;
+        if (item.first == name || item.first.rfind(name + "_", 0) == 0) {
+            sym = item.second;
+            found = item.first;
+        }
+    }
+    if (sym == nullptr) return nullptr;
+    if (ASR::symbol_t *twin = scope->get_symbol(found + "__gpu_deferred")) {
+        if (ASR::is_a<ASR::Function_t>(*twin)) {
+            return ASR::down_cast<ASR::Function_t>(twin);
+        }
+    }
+    return ASR::down_cast<ASR::Function_t>(sym);
+}
+
+// Host syncs one CG iteration executes: the loop in cgsolve, plus one call
+// of each helper, and two calls of cgdot. Four of them read device data on
+// the host (both dot products, the pole sum, and the phi halo).
+size_t cg_iteration_syncs(const std::string &source, std::string &detail) {
+    CompilerOptions options;
+    options.gpu_backend = "metal";
+    options.po.gpu_offload_metal = true;
+    options.po.runtime_library_dir = LFORTRAN_BUILD_RUNTIME_DIR;
+    FortranEvaluator evaluator(options);
+    LocationManager lm;
+    LocationManager::FileLocations file;
+    file.in_filename = "gpu_cg_sync.f90";
+    lm.files.push_back(file);
+    lm.file_ends.push_back(LFortran::source_offset(source.size()));
+    diag::Diagnostics diagnostics;
+    auto parsed = evaluator.get_asr2(source, lm, diagnostics);
+    INFO(diagnostics.render2());
+    REQUIRE(parsed.ok);
+    ASR::TranslationUnit_t &unit = *parsed.result;
+    Allocator allocator(32 * 1024 * 1024);
+    PassManager passes;
+    std::string pass = "gpu_vector_lanes", skip;
+    passes.parse_pass_arg(pass, skip);
+    options.po.pass_cumulative = true;
+    passes.apply_passes(allocator, &unit, options.po, diagnostics);
+    INFO(diagnostics.render2());
+    REQUIRE_FALSE(diagnostics.has_error());
+    pass_gpu_launch_sync(allocator, unit, options.po);
+    REQUIRE(asr_verify(unit, true, diagnostics));
+    SymbolTable *scope = unit.m_symtab;
+    const char *names[] = {"cgsolve", "ax", "unpack_scalar",
+        "set_boundary_points", "seam_hhh", "delsq", "prec_inv", "cgdot"};
+    ASR::Function_t *fn[8];
+    detail.clear();
+    for (int i = 0; i < 8; i++) {
+        fn[i] = external_body(scope, names[i]);
+        REQUIRE(fn[i] != nullptr);
+    }
+    size_t loop = count_loop_syncs(fn[0]);
+    size_t ax = count_gpu_syncs(fn[1]->m_body, fn[1]->n_body);
+    size_t unpack = count_gpu_syncs(fn[2]->m_body, fn[2]->n_body);
+    size_t boundary = count_gpu_syncs(fn[3]->m_body, fn[3]->n_body);
+    size_t seam = count_gpu_syncs(fn[4]->m_body, fn[4]->n_body);
+    size_t delsq = count_gpu_syncs(fn[5]->m_body, fn[5]->n_body);
+    size_t prec = count_gpu_syncs(fn[6]->m_body, fn[6]->n_body);
+    size_t dot = count_gpu_syncs(fn[7]->m_body, fn[7]->n_body);
+    size_t total = loop + ax + unpack + boundary + seam + delsq + prec
+        + 2*dot;
+    detail = "loop=" + std::to_string(loop) + " ax=" + std::to_string(ax)
+        + " unpack=" + std::to_string(unpack)
+        + " boundary=" + std::to_string(boundary)
+        + " seam=" + std::to_string(seam) + " delsq=" + std::to_string(delsq)
+        + " prec_inv=" + std::to_string(prec)
+        + " cgdot=" + std::to_string(dot)
+        + " per_iteration=" + std::to_string(total);
+    return total;
+}
+
+TEST_CASE("GPU CG iteration syncs only where the host reads device data") {
+    // POT3D's CG helpers are external subroutines, not module procedures.
+    // prec_inv is called through an interface and its dummy is a target;
+    // it only scales by a module array between timer calls. The host reads
+    // device data four times per iteration: both dots, the pole reduction,
+    // and the phi halo. Counting GpuSync after gpu_launch_sync (Metal),
+    // with cgdot's sync taken twice.
+    const std::string source = R"(
+module cg_fields
+implicit none
+integer, parameter :: n = 32
+integer, parameter :: nr = 4, nt = 4, np = 4
+real, allocatable :: a_i(:)
+real :: x_ax(nr, nt, np)
+real :: coef(nr, nt, np)
+real :: sum0(nr)
+integer :: istack = 0
+end module
+
+module prec_inv_interface
+    interface
+        subroutine prec_inv(x)
+            use cg_fields, only: n
+            real, target :: x(n)
+        end subroutine
+    end interface
+end module
+
+subroutine timer_on()
+    use cg_fields, only: istack
+    istack = istack + 1
+    if (istack < 0) print *, istack
+end subroutine
+
+subroutine timer_off()
+    use cg_fields, only: istack
+    istack = istack - 1
+end subroutine
+
+subroutine prec_inv(x)
+    use cg_fields, only: a_i, n
+    real, target :: x(n)
+    integer :: i
+    call timer_on()
+    do concurrent (i = 1:n)
+        x(i) = a_i(i)*x(i)
+    end do
+    call timer_off()
+end subroutine
+
+subroutine unpack_scalar(s, x)
+    use cg_fields, only: n, nr, nt, np
+    real :: s(nr, nt, np)
+    real :: x(n)
+    integer :: i, j, k
+    do concurrent (k = 1:np, j = 1:nt, i = 1:nr)
+        s(i, j, k) = x(1 + mod(i + j + k, n))
+    end do
+end subroutine
+
+subroutine sum_over_phi(a0)
+    use cg_fields, only: nr
+    real :: a0(nr)
+    if (a0(1) < -1.0e30) error stop
+end subroutine
+
+subroutine set_boundary_points(x)
+    use cg_fields, only: sum0, nr, nt, np
+    real :: x(nr, nt, np)
+    integer :: i, k
+    real :: t
+    do concurrent (i = 1:nr)
+        t = 0
+        do concurrent (k = 1:np) reduce(+:t)
+            t = t + x(i, 1, k)
+        end do
+        sum0(i) = t
+    end do
+    call sum_over_phi(sum0)
+    do concurrent (k = 1:np, i = 1:nr)
+        x(i, 1, k) = 2*sum0(i) - x(i, min(2, nt), k)
+    end do
+end subroutine
+
+subroutine exchange_halo(a)
+    use cg_fields, only: nr, nt, np
+    real :: a(nr, nt, np)
+    if (a(1, 1, 1) < -1.0e30) error stop
+end subroutine
+
+subroutine seam_hhh(a)
+    use cg_fields, only: nr, nt, np
+    real :: a(nr, nt, np)
+    call timer_on()
+    call exchange_halo(a)
+    call timer_off()
+end subroutine
+
+subroutine delsq(x, y)
+    use cg_fields, only: coef, n, nr, nt, np
+    real :: x(nr, nt, np)
+    real :: y(n)
+    integer :: i
+    do concurrent (i = 1:n)
+        y(i) = coef(1, 1, 1)*x(1, 1, 1 + mod(i, np))
+    end do
+end subroutine
+
+subroutine ax(x, y)
+    use cg_fields, only: x_ax, n
+    real :: x(n)
+    real :: y(n)
+    call unpack_scalar(x_ax, x)
+    call set_boundary_points(x_ax)
+    call seam_hhh(x_ax)
+    call timer_on()
+    call delsq(x_ax, y)
+    call timer_off()
+end subroutine
+
+subroutine global_sum(v)
+    real :: v
+    call timer_on()
+    if (v < -1.0e30) error stop
+    call timer_off()
+end subroutine
+
+function cgdot(x, y) result(s)
+    use cg_fields, only: n
+    real :: x(n), y(n)
+    real :: s
+    integer :: i
+    s = 0
+    do concurrent (i = 1:n) reduce(+:s)
+        s = s + x(i)*y(i)
+    end do
+    call global_sum(s)
+end function
+
+subroutine cgsolve(x, r)
+    use cg_fields, only: n
+    use prec_inv_interface
+    real :: x(n), r(n)
+    real :: p(n), ap(n)
+    real :: pdotap, rdotr, alphai, betai, rdotr_old
+    integer :: i, it
+    p = r
+    rdotr = 1
+    do it = 1, 2
+        call ax(p, ap)
+        pdotap = cgdot(p, ap)
+        alphai = rdotr/pdotap
+        do concurrent (i = 1:n)
+            x(i) = x(i) + alphai*p(i)
+            r(i) = r(i) - alphai*ap(i)
+            ap(i) = r(i)
+        end do
+        call prec_inv(ap)
+        rdotr_old = rdotr
+        rdotr = cgdot(r, ap)
+        betai = rdotr/rdotr_old
+        do concurrent (i = 1:n)
+            p(i) = betai*p(i) + ap(i)
+        end do
+    end do
+end subroutine
+
+program cg_sync
+    use cg_fields
+    implicit none
+    real :: x(n), r(n)
+    integer :: i
+    allocate(a_i(n))
+    do i = 1, n
+        x(i) = 1
+        r(i) = 1
+        a_i(i) = 2
+    end do
+    x_ax = 0
+    coef = 1
+    sum0 = 0
+    call cgsolve(x, r)
+    print *, x(1), r(1)
+end program
+)";
+    std::string detail;
+    size_t total = cg_iteration_syncs(source, detail);
+    INFO(detail);
+    CHECK(total == 4);
 }
 
 #endif

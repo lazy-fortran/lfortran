@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -127,6 +128,13 @@ ASR::expr_t* make_iso_c_null_constant(Allocator& al, const Location& loc,
         SymbolTable* scope, ASR::symbol_t* null_sym);
 void anchor_cptr_null_constant_to_type_declaration(Allocator& al,
         ASR::expr_t* expr, ASR::Variable_t* var);
+// A parameter array of a use-associated derived type stores each element as a
+// StructConstant whose type symbol lives in the module that defined the type.
+// That symbol table is not part of this module's file. Copy such constants
+// (the originals belong to the defining module) and name the type with a
+// symbol `scope` can reach, so the module file can be loaded again.
+ASR::expr_t* anchor_struct_constants(Allocator& al, ASR::expr_t* expr,
+        SymbolTable* scope);
 ASR::Variable_t* get_variable_from_symbol(ASR::symbol_t* sym);
 ASR::FunctionType_t* get_procedure_type_from_expr(ASR::expr_t* expr);
 ASR::FunctionType_t* get_procedure_pointer_component_type(
@@ -584,6 +592,310 @@ static inline ASR::expr_t* make_RealConstant_util(Allocator& al,
     return ASR::down_cast<ASR::expr_t>(ASR::make_RealConstant_t(al, loc, value, type));
 }
 
+// Value of a RealConstant as a host double, whatever its kind. Lossy for
+// kinds 10 and 16, whose `m_r` is a pointer-encoded payload and must never be
+// read as a double directly. Use only where a double result is acceptable.
+static inline double real_constant_get_double(const ASR::RealConstant_t* c) {
+    int k = extract_kind_from_ttype_t(c->m_type);
+    if (k == 16) {
+        return lf_f128_to_double(real_constant_get_r16(c));
+    } else if (k == 10) {
+        return static_cast<double>(real_constant_get_r10(c));
+    }
+    return c->m_r;
+}
+
+// Binary128 value of a kind=16 real constant expression.
+static inline lf_float128 real_expr_get_r16(const ASR::expr_t* e) {
+    return real_constant_get_r16(ASR::down_cast<ASR::RealConstant_t>(e));
+}
+
+// --- binary128 bit-level helpers (little-endian IEEE-754 binary128) ---------
+static inline int real16_biased_exponent(const lf_float128& v) {
+    return ((v.bytes[15] & 0x7f) << 8) | v.bytes[14];
+}
+
+static inline bool real16_is_finite(const lf_float128& v) {
+    return real16_biased_exponent(v) != 0x7fff;
+}
+
+static inline bool real16_is_zero(const lf_float128& v) {
+    if (real16_biased_exponent(v) != 0) {
+        return false;
+    }
+    for (int i = 0; i < 14; i++) {
+        if (v.bytes[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// 2**n as a binary128 value for n in [-16494, 16383] (down to the smallest
+// subnormal).
+static inline lf_float128 real16_pow2(int n) {
+    lf_float128 r;
+    std::memset(r.bytes, 0, sizeof(r.bytes));
+    if (n >= -16382) {
+        int biased = n + 16383;
+        r.bytes[15] = static_cast<uint8_t>(biased >> 8);
+        r.bytes[14] = static_cast<uint8_t>(biased & 0xff);
+    } else {
+        int bit = n + 16494;
+        r.bytes[bit / 8] = static_cast<uint8_t>(1u << (bit % 8));
+    }
+    return r;
+}
+
+// Split a finite, non-zero binary128 value as `v = f * 2**e` with
+// 0.5 <= |f| < 1 (the Fortran model used by EXPONENT and FRACTION).
+static inline void real16_frexp(lf_float128 v, lf_float128& f, int& e) {
+    int biased = real16_biased_exponent(v);
+    int extra = 0;
+    if (biased == 0) {
+        v = lf_f128_mul(v, real16_pow2(112));
+        biased = real16_biased_exponent(v);
+        extra = 112;
+    }
+    e = biased - 16382 - extra;
+    f = lf_f128_mul(v, real16_pow2(-(e + extra)));
+}
+
+// The adjacent representable binary128 value of a finite `v` in the direction
+// of +infinity (`up`) or -infinity.
+static inline lf_float128 real16_next(lf_float128 v, bool up) {
+    bool negative = (v.bytes[15] & 0x80) != 0;
+    bool decrease_magnitude = !real16_is_zero(v) && (up == negative);
+    lf_float128 r = v;
+    if (real16_is_zero(v)) {
+        std::memset(r.bytes, 0, sizeof(r.bytes));
+        r.bytes[0] = 1;
+        r.bytes[15] = up ? 0 : 0x80;
+        return r;
+    }
+    for (int i = 0; i < 16; i++) {
+        if (decrease_magnitude) {
+            if (r.bytes[i]-- != 0) break;
+        } else {
+            if (++r.bytes[i] != 0) break;
+        }
+    }
+    return r;
+}
+
+// Round a binary128 value to the nearest integral value, halfway cases away
+// from zero (Fortran NINT/ANINT). `a - floor(a)` is exact, so there is no
+// double rounding as with `floor(a + 0.5)`.
+static inline lf_float128 real16_round_half_away(lf_float128 v) {
+    if (!real16_is_finite(v)) {
+        return v;
+    }
+    lf_float128 a = lf_f128_abs(v);
+    lf_float128 f = lf_f128_floor(a);
+    if (lf_f128_cmp(lf_f128_sub(a, f), lf_f128_from_double(0.5)) >= 0) {
+        f = lf_f128_add(f, lf_f128_from_int64(1));
+    }
+    return lf_f128_signbit(v) ? lf_f128_neg(f) : f;
+}
+
+// Exact conversion of an integral binary128 value to int64_t. Returns false if
+// the value is NaN or outside the int64_t range.
+static inline bool real16_integral_to_int64(lf_float128 v, int64_t& out) {
+    if (!real16_is_finite(v)) {
+        return false;
+    }
+    lf_float128 a = lf_f128_abs(v);
+    if (lf_f128_cmp(a, real16_pow2(63)) >= 0) {
+        if (lf_f128_cmp(v, lf_f128_neg(real16_pow2(63))) == 0) {
+            out = std::numeric_limits<int64_t>::min();
+            return true;
+        }
+        return false;
+    }
+    lf_float128 two32 = real16_pow2(32);
+    lf_float128 hi = lf_f128_floor(lf_f128_div(a, two32));
+    lf_float128 lo = lf_f128_sub(a, lf_f128_mul(hi, two32));
+    uint64_t magnitude = (static_cast<uint64_t>(lf_f128_to_double(hi)) << 32)
+        | static_cast<uint64_t>(lf_f128_to_double(lo));
+    out = lf_f128_signbit(v) ? -static_cast<int64_t>(magnitude)
+                             : static_cast<int64_t>(magnitude);
+    return true;
+}
+
+// Exact remainder `a - trunc(a / b) * b` (C `fmodq`) of two finite binary128
+// values with `b` non-zero, computed by binary long division on the
+// significands. The result has the sign of `a`.
+static inline lf_float128 real16_fmod(const lf_float128& a, const lf_float128& b) {
+    struct Wide {
+        uint64_t hi, lo;
+    };
+    auto significand = [](const lf_float128& v, int& exponent) {
+        Wide w{0, 0};
+        for (int i = 7; i >= 0; i--) {
+            w.lo = (w.lo << 8) | v.bytes[i];
+            w.hi = (w.hi << 8) | v.bytes[8 + i];
+        }
+        w.hi &= 0x0000ffffffffffffULL;
+        int biased = real16_biased_exponent(v);
+        if (biased != 0) {
+            w.hi |= 1ULL << 48;
+        }
+        exponent = (biased == 0 ? 1 : biased) - 16383 - 112;
+        return w;
+    };
+    auto less = [](const Wide& x, const Wide& y) {
+        return x.hi < y.hi || (x.hi == y.hi && x.lo < y.lo);
+    };
+    auto shift_left = [](const Wide& x, int n) {
+        Wide r{x.hi, x.lo};
+        for (int i = 0; i < n; i++) {
+            r.hi = (r.hi << 1) | (r.lo >> 63);
+            r.lo <<= 1;
+        }
+        return r;
+    };
+    auto bit_length = [](const Wide& x) {
+        int n = 0;
+        for (uint64_t t = x.hi ? x.hi : x.lo; t; t >>= 1) n++;
+        return x.hi ? n + 64 : n;
+    };
+    int ea, eb;
+    Wide ma = significand(a, ea);
+    Wide divisor = significand(b, eb);
+    int result_exponent = std::min(ea, eb);
+    int trailing_zero_bits = 0;
+    if (ea >= eb) {
+        trailing_zero_bits = ea - eb;
+    } else if (bit_length(divisor) + (eb - ea) > 127) {
+        divisor = Wide{~0ULL, ~0ULL};
+    } else {
+        divisor = shift_left(divisor, eb - ea);
+    }
+    Wide r{0, 0};
+    auto step = [&](int bit) {
+        r = shift_left(r, 1);
+        r.lo |= static_cast<uint64_t>(bit);
+        if (!less(r, divisor)) {
+            uint64_t borrow = r.lo < divisor.lo;
+            r.lo -= divisor.lo;
+            r.hi -= divisor.hi + borrow;
+        }
+    };
+    for (int i = 112; i >= 0; i--) {
+        int bit = i >= 64 ? static_cast<int>((ma.hi >> (i - 64)) & 1)
+                          : static_cast<int>((ma.lo >> i) & 1);
+        step(bit);
+    }
+    for (int i = 0; i < trailing_zero_bits; i++) {
+        step(0);
+    }
+    lf_float128 result;
+    std::memset(result.bytes, 0, sizeof(result.bytes));
+    if (r.hi != 0 || r.lo != 0) {
+        int top = bit_length(r) - 1;
+        int biased = top + result_exponent + 16383;
+        Wide m = r;
+        if (biased >= 1) {
+            m = shift_left(m, 112 - top);
+            m.hi &= 0x0000ffffffffffffULL;
+        } else {
+            m = shift_left(m, result_exponent + 16494);
+            biased = 0;
+        }
+        for (int i = 0; i < 8; i++) {
+            result.bytes[i] = static_cast<uint8_t>(m.lo >> (8 * i));
+            result.bytes[8 + i] = static_cast<uint8_t>(m.hi >> (8 * i));
+        }
+        result.bytes[14] = static_cast<uint8_t>(biased & 0xff);
+        result.bytes[15] = static_cast<uint8_t>(biased >> 8);
+    }
+    if (lf_f128_signbit(a)) {
+        result = lf_f128_neg(result);
+    }
+    return result;
+}
+
+// --- complex(16) value access ------------------------------------------------
+//
+// The `ComplexConstant_t.m_re` and `m_im` fields follow the `RealConstant_t.m_r`
+// convention (see "real(16) value access" above): for kind=4,8 they hold the
+// values as doubles, for kind=16 each one is bit-cast from a pointer to 16
+// arena-allocated bytes holding a binary128 value. All access goes through the
+// helpers below.
+
+// Whether the parts of `c` are binary128 payloads.
+static inline bool complex_constant_is_r16(const ASR::ComplexConstant_t* c) {
+    return extract_kind_from_ttype_t(c->m_type) == 16;
+}
+
+static inline lf_float128 complex_constant_part_r16(double part) {
+    lf_float128 v;
+    std::memcpy(v.bytes, real_constant_unpack_r16(part), 16);
+    return v;
+}
+
+// The real part of a ComplexConstant of any kind, rounded to a double for
+// kind=16.
+static inline double complex_constant_re(const ASR::ComplexConstant_t* c) {
+    return complex_constant_is_r16(c) ?
+        lf_f128_to_double(complex_constant_part_r16(c->m_re)) : c->m_re;
+}
+
+// The imaginary part of a ComplexConstant of any kind, rounded to a double for
+// kind=16.
+static inline double complex_constant_im(const ASR::ComplexConstant_t* c) {
+    return complex_constant_is_r16(c) ?
+        lf_f128_to_double(complex_constant_part_r16(c->m_im)) : c->m_im;
+}
+
+// The binary128 real part of a kind=16 ComplexConstant.
+static inline lf_float128 complex_constant_re_r16(const ASR::ComplexConstant_t* c) {
+    LCOMPILERS_ASSERT(complex_constant_is_r16(c));
+    return complex_constant_part_r16(c->m_re);
+}
+
+// The binary128 imaginary part of a kind=16 ComplexConstant.
+static inline lf_float128 complex_constant_im_r16(const ASR::ComplexConstant_t* c) {
+    LCOMPILERS_ASSERT(complex_constant_is_r16(c));
+    return complex_constant_part_r16(c->m_im);
+}
+
+// The real (or, if `imag`, the imaginary) part of `c` as a RealConstant of
+// `real_type`, which is exact when both are kind=16.
+static inline ASR::expr_t* complex_constant_part_to_real(Allocator& al,
+        const Location& loc, const ASR::ComplexConstant_t* c, bool imag,
+        ASR::ttype_t* real_type) {
+    if (complex_constant_is_r16(c) && extract_kind_from_ttype_t(real_type) == 16) {
+        return make_RealConstant_r16(al, loc,
+            imag ? complex_constant_im_r16(c) : complex_constant_re_r16(c), real_type);
+    }
+    return make_RealConstant_util(al, loc,
+        imag ? complex_constant_im(c) : complex_constant_re(c), real_type);
+}
+
+// Build a kind=16 ComplexConstant from two binary128 values.
+static inline ASR::expr_t* make_ComplexConstant_r16(Allocator& al,
+        const Location& loc, lf_float128 re, lf_float128 im, ASR::ttype_t* type) {
+    uint8_t* re_bytes = static_cast<uint8_t*>(al.alloc(16));
+    uint8_t* im_bytes = static_cast<uint8_t*>(al.alloc(16));
+    std::memcpy(re_bytes, re.bytes, 16);
+    std::memcpy(im_bytes, im.bytes, 16);
+    return ASR::down_cast<ASR::expr_t>(ASR::make_ComplexConstant_t(al, loc,
+        real_constant_pack_r16(re_bytes), real_constant_pack_r16(im_bytes), type));
+}
+
+// Kind-aware counterpart of `ASR::make_ComplexConstant_t` taking two doubles:
+// for kind=16 the values are widened to binary128. This is the single supported
+// way to build a complex constant from host doubles when the kind may be 16.
+static inline ASR::asr_t* make_ComplexConstant_util(Allocator& al,
+        const Location& loc, double re, double im, ASR::ttype_t* type) {
+    if (extract_kind_from_ttype_t(type) == 16) {
+        return &make_ComplexConstant_r16(al, loc, lf_f128_from_double(re),
+            lf_f128_from_double(im), type)->base;
+    }
+    return ASR::make_ComplexConstant_t(al, loc, re, im, type);
+}
+
 void set_kind_to_ttype_t(ASR::ttype_t* type, int kind);
 
 ASR::Variable_t* expr_to_variable_or_null(ASR::expr_t* expr);
@@ -703,20 +1015,7 @@ static inline std::string logicalbinop_to_str_python(const ASR::logicalbinopType
 
 static inline ASR::expr_t* expr_value(ASR::expr_t *f)
 {
-    ASR::expr_t* value = ASR::expr_value0(f);
-    if (value == nullptr && f->type == ASR::exprType::ComplexConstructor) {
-        // A constant complex(16) value is a constructor from two real(16)
-        // constants (a ComplexConstant holds doubles), which is its own value.
-        ASR::ComplexConstructor_t* c = (ASR::ComplexConstructor_t*)f;
-        ASR::expr_t* re = ASR::expr_value0(c->m_re);
-        ASR::expr_t* im = ASR::expr_value0(c->m_im);
-        if (re && im && re->type == ASR::exprType::RealConstant &&
-                im->type == ASR::exprType::RealConstant &&
-                extract_kind_from_ttype_t(c->m_type) == 16) {
-            return f;
-        }
-    }
-    return value;
+    return ASR::expr_value0(f);
 }
 
 std::pair<char**, size_t> symbol_dependencies(const ASR::symbol_t *f);
@@ -1166,19 +1465,40 @@ bool is_value_equal(ASR::expr_t* test_expr, ASR::expr_t* desired_expr);
 
 bool is_value_in_range(ASR::expr_t* start, ASR::expr_t* end, ASR::expr_t* value);
 
+// Returns true if the expression is an array constant of real(16) or complex(16)
+// elements
+static inline bool is_kind16_array_constant(ASR::expr_t* a_value) {
+    if( !a_value || !ASR::is_a<ASR::ArrayConstant_t>(*a_value) ) {
+        return false;
+    }
+    ASR::ttype_t* elem_type = ASRUtils::extract_type(ASRUtils::expr_type(a_value));
+    return (ASR::is_a<ASR::Real_t>(*elem_type) || ASR::is_a<ASR::Complex_t>(*elem_type)) &&
+        ASRUtils::extract_kind_from_ttype_t(elem_type) == 16;
+}
+
 // Returns true if all arguments are evaluated
-static inline bool all_args_evaluated(const Vec<ASR::expr_t*> &args, bool ignore_null=false) {
+// `allow_complex16` accepts complex(16) constants, for the callers that
+// evaluate them without rounding to a double.
+// `allow_kind16_arrays` accepts real(16) and complex(16) array constants, for
+// the callers that evaluate such an array element by element.
+static inline bool all_args_evaluated(const Vec<ASR::expr_t*> &args, bool ignore_null=false,
+        bool allow_complex16=false, bool allow_kind16_arrays=false) {
     for (auto &a : args) {
         if (ignore_null && !a) continue;
         ASR::expr_t* a_value = ASRUtils::expr_value(a);
         if( !is_value_constant(a_value) ) {
             return false;
         }
-        // A ComplexConstant holds its parts as doubles, so a complex(16)
-        // value is never folded: it would lose precision.
-        if( a_value && (ASR::is_a<ASR::ComplexConstant_t>(*a_value) ||
-                ASR::is_a<ASR::ComplexConstructor_t>(*a_value)) &&
-                ASRUtils::extract_kind_from_ttype_t(ASRUtils::expr_type(a_value)) == 16 ) {
+        // Intrinsic folding evaluates complex values as doubles, which would
+        // lose precision for complex(16).
+        if( !allow_complex16 && a_value && ASR::is_a<ASR::ComplexConstant_t>(*a_value) &&
+                ASRUtils::complex_constant_is_r16(
+                    ASR::down_cast<ASR::ComplexConstant_t>(a_value)) ) {
+            return false;
+        }
+        // The array intrinsics read the elements of an array constant as
+        // doubles, which would lose precision for real(16) and complex(16).
+        if( !allow_kind16_arrays && is_kind16_array_constant(a_value) ) {
             return false;
         }
     }
@@ -1405,17 +1725,12 @@ ASR::expr_t* get_minimum_value_with_given_type(Allocator& al, ASR::ttype_t* asr_
 
 ASR::expr_t* get_maximum_value_with_given_type(Allocator& al, ASR::ttype_t* asr_type);
 
-// The cast `cast_kind` (ComplexToComplex or ComplexToReal) of a complex(16)
-// constant `value`: a ComplexConstant, or a ComplexConstructor from real(16)
-// constants. A complex(16) constant is not a ComplexConstant, whose parts are
-// doubles. Returns nullptr if `value` is not such a constant.
-ASR::expr_t* fold_complex16_cast(Allocator& al, const Location& loc,
-    ASR::expr_t* value, ASR::cast_kindType cast_kind, ASR::ttype_t* dest_type);
-
-// The cast of the real(16) constant `value` to the complex(16) type
-// `dest_type`.
-ASR::expr_t* make_complex16_from_real16(Allocator& al, const Location& loc,
-    ASR::expr_t* value, ASR::ttype_t* dest_type);
+// The constant cast `cast_kind` (ComplexToComplex or ComplexToReal) of the
+// complex constant `c` to `dest_type`, exact when `c` and `dest_type` are
+// both kind=16.
+ASR::expr_t* fold_complex_cast(Allocator& al, const Location& loc,
+    const ASR::ComplexConstant_t* c, ASR::cast_kindType cast_kind,
+    ASR::ttype_t* dest_type);
 
 const ASR::intentType intent_local=ASR::intentType::Local; // local variable (not a dummy argument)
 const ASR::intentType intent_in   =ASR::intentType::In; // dummy argument, intent(in)
@@ -2283,6 +2598,21 @@ class ReplaceFunctionParamWithArg: public ASR::BaseExprReplacer<ReplaceFunctionP
         }
     }
 
+    // An assumed-rank dummy `x(..)` may be associated with a scalar actual,
+    // an object of rank zero with one element: `s`, `m(1, 1)`, `g(s)` or
+    // `sum(m)`. A `size(x)` in a bound or a length then becomes the size of
+    // that scalar, 1. There is no valid `dim` for rank zero, so
+    // `size(x, dim)` is not conforming then; it gets the same value instead
+    // of an ArraySize of a scalar.
+    void replace_ArraySize(ASR::ArraySize_t *x) {
+        ASR::BaseExprReplacer<ReplaceFunctionParamWithArg>::replace_ArraySize(x);
+        if (current_expr && !ASRUtils::is_array(ASRUtils::expr_type(x->m_v))) {
+            replacements.push_back({current_expr, *current_expr});
+            *current_expr = ASRUtils::EXPR(ASR::make_IntegerConstant_t(
+                al, x->base.base.loc, 1, x->m_type));
+        }
+    }
+
     ASR::expr_t* replace_FunctionParam_with_arg(ASR::expr_t* t);
 
     void replace_type(ASR::ttype_t* t);
@@ -2311,15 +2641,54 @@ ASR::expr_t* get_compile_time_array_size(Allocator& al, ASR::ttype_t* array_type
 ASR::expr_t* get_expr_size_expr(ASR::expr_t* x, bool inside_binop = false);
 ASR::expr_t* get_ArrayConstant_size(Allocator& al, ASR::ArrayConstant_t* x);
 
-ASR::expr_t* get_ImpliedDoLoop_size(Allocator& al, ASR::ImpliedDoLoop_t* implied_doloop);
+// Where the size of an array constructor can be computed with statements:
+// they are appended to `body`, and the variables they need are added to
+// `scope`. The number of elements of an implied-do loop whose values have
+// sizes that depend on its variable, as in [((j, j = i, n), i = 1, m)], is
+// the sum of those sizes over the values of the variable, which only a loop
+// can compute in general.
+//
+// A null `body` stands for a place that cannot hold statements, such as the
+// dimensions of an array type. Such a sum is then the closed form
+// n * (f(first) + f(last)) / 2 of the n sizes f(var), which is exact if
+// f(var) is linear in the variable and never negative, and at least the
+// sum if f(var) is convex in it.
+struct ArraySizeStatements {
+    Vec<ASR::stmt_t*>* body;
+    SymbolTable* scope;
+};
+
+// The number of elements of `implied_doloop`. Without `stmts`, nullptr if it
+// can only be computed with statements. With `clamp`, every trip count is
+// taken as max(0, trip count), as the sizes summed by a loop must be.
+ASR::expr_t* get_ImpliedDoLoop_size(Allocator& al, ASR::ImpliedDoLoop_t* implied_doloop,
+    ArraySizeStatements* stmts = nullptr, bool clamp = false);
+
+// Appends to `stmts`
+//     count = 0
+//     do var = start, end, step
+//         count = count + iteration_size
+//     end do
+// for the implied-do loop `idl` and returns `count`, a new variable of type
+// `count_type`. `iteration_size` gives the number of elements of one
+// iteration, in `count_type`, and may append statements to the loop body it
+// is given.
+ASR::expr_t* count_ImpliedDoLoop_elements(Allocator& al,
+    ASR::ImpliedDoLoop_t* idl, ASR::ttype_t* count_type,
+    ArraySizeStatements& stmts,
+    const std::function<ASR::expr_t*(ArraySizeStatements&)>& iteration_size);
 
 // The extent (end - start)/step + 1 of a section triplet, in the type
-// `size_type`.
+// `size_type`. With `clamp`, the number of its elements,
+// max(0, (end - start + step)/step), which is zero for an empty triplet.
 ASR::expr_t* get_triplet_extent(Allocator& al, const Location& loc,
     ASR::expr_t* start, ASR::expr_t* end, ASR::expr_t* step,
-    ASR::ttype_t* size_type);
+    ASR::ttype_t* size_type, bool clamp = false);
 
-ASR::expr_t* get_ArrayConstructor_size(Allocator& al, ASR::ArrayConstructor_t* x);
+// The number of elements of `x`; `stmts` and `clamp` as for
+// get_ImpliedDoLoop_size.
+ASR::expr_t* get_ArrayConstructor_size(Allocator& al, ASR::ArrayConstructor_t* x,
+    ArraySizeStatements* stmts = nullptr, bool clamp = false);
 
 ASR::asr_t* make_Assignment_t_util(Allocator &al, const Location &a_loc,
     ASR::expr_t* a_target, ASR::expr_t* a_value,
@@ -3275,7 +3644,12 @@ class ReplaceArgVisitor: public ASR::BaseExprReplacer<ReplaceArgVisitor> {
 
     void replace_ArraySize(ASR::ArraySize_t* x) {
         ASR::BaseExprReplacer<ReplaceArgVisitor>::replace_ArraySize(x);
-        if( ASR::is_a<ASR::ArraySection_t>(*x->m_v) ) {
+        if( !ASRUtils::is_array(ASRUtils::expr_type(x->m_v)) ) {
+            // The size of a scalar associated with an assumed-rank dummy,
+            // as in ReplaceFunctionParamWithArg::replace_ArraySize.
+            *current_expr = ASRUtils::EXPR(ASR::make_IntegerConstant_t(
+                al, x->base.base.loc, 1, x->m_type));
+        } else if( ASR::is_a<ASR::ArraySection_t>(*x->m_v) ) {
             *current_expr = ASRUtils::EXPR(ASRUtils::make_ArraySize_t_util(
                 al, x->base.base.loc, x->m_v, x->m_dim, x->m_type, x->m_value, true));
         }
@@ -4109,7 +4483,7 @@ inline bool is_array_constant_element_type(ASR::ttype_t* type) {
             return kind == 1 || kind == 2 || kind == 4 || kind == 8;
         case ASR::ttypeType::Real:
         case ASR::ttypeType::Complex:
-            return kind == 4 || kind == 8;
+            return kind == 4 || kind == 8 || kind == 16;
         case ASR::ttypeType::Logical:
         case ASR::ttypeType::String:
         case ASR::ttypeType::StructType:
@@ -4170,13 +4544,46 @@ T* set_data_real(T* data, ASR::expr_t** a_args, size_t n_args) {
     return data;
 }
 
+inline lf_float128 load_float128(const uint8_t* bytes) {
+    lf_float128 v;
+    std::memcpy(v.bytes, bytes, 16);
+    return v;
+}
+
+inline std::string float128_to_string(const uint8_t* bytes) {
+    char buf[64];
+    lf_f128_to_str(buf, load_float128(bytes));
+    return buf;
+}
+
+// The data of a real(16) array constant: 16 bytes of binary128 per element.
+inline void* set_data_real16(uint8_t* data, ASR::expr_t** a_args, size_t n_args) {
+    for (size_t i = 0; i < n_args; i++) {
+        std::memcpy(data + 16*i, real_constant_get_r16_bytes(
+            ASR::down_cast<ASR::RealConstant_t>(ASRUtils::expr_value(a_args[i]))), 16);
+    }
+    return data;
+}
+
+// The data of a complex(16) array constant: the binary128 real and imaginary
+// parts of each element, 32 bytes per element.
+inline void* set_data_complex16(uint8_t* data, ASR::expr_t** a_args, size_t n_args) {
+    for (size_t i = 0; i < n_args; i++) {
+        ASR::ComplexConstant_t* c = ASR::down_cast<ASR::ComplexConstant_t>(
+            ASRUtils::expr_value(a_args[i]));
+        std::memcpy(data + 32*i, complex_constant_re_r16(c).bytes, 16);
+        std::memcpy(data + 32*i + 16, complex_constant_im_r16(c).bytes, 16);
+    }
+    return data;
+}
+
 template<typename T>
 T* set_data_complex(T* data, ASR::expr_t** a_args, size_t n_args) {
     for (size_t i = 0; i < n_args; i++) {
         data[2*i] = static_cast<T>(
-            ASR::down_cast<ASR::ComplexConstant_t>(ASRUtils::expr_value(a_args[i]))->m_re);
+            ASRUtils::complex_constant_re(ASR::down_cast<ASR::ComplexConstant_t>(ASRUtils::expr_value(a_args[i]))));
         data[2*i + 1] = static_cast<T>(
-            ASR::down_cast<ASR::ComplexConstant_t>(ASRUtils::expr_value(a_args[i]))->m_im);
+            ASRUtils::complex_constant_im(ASR::down_cast<ASR::ComplexConstant_t>(ASRUtils::expr_value(a_args[i]))));
     }
     return data;
 }
