@@ -56,6 +56,10 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
 | lfortran/lfortran#17863 | `nearest(0, -1.0)` is the smallest negative subnormal, not NaN |
 | lfortran/lfortran#17864 | `scale(x, i)` by `ldexp` for real(4) and real(8), so that it does not overflow where the result is representable |
 | lfortran/lfortran#17865 | `spacing` of negative numbers, of `huge` and below `tiny` |
+| lfortran/lfortran#17887 | bounds-remapping pointer assignment to a derived-type component |
+| lfortran/lfortran#17888 | type-info size of a derived type for the target's layout (class arrays on wasm32) |
+| lfortran/lfortran#17889 | SELECT TYPE in a procedure copied to pass arrays by data |
+| lfortran/lfortran#17890 | `c_associated` of a `c_ptr` with the POINTER attribute |
 
 Fixes in `main` that have no upstream pull request yet: static storage for
 main program variables (bf4b95bcc1), the names a cell defines, uses and
