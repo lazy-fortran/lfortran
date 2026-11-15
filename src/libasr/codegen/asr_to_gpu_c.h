@@ -811,20 +811,25 @@ public:
             ASRUtils::extract_kind_from_ttype_t(type) < 4;
     }
 
-    // min/max of two arguments, each spelled with the result's device type
-    // when that is narrower than int.
+    // min/max of any number of arguments (folded from the left), each
+    // spelled with the result's device type when that is narrower than int.
     void emit_min_max(const char *name, ASR::ttype_t *type,
-            ASR::expr_t *a, ASR::expr_t *b) {
+            const std::vector<ASR::expr_t*> &args) {
         std::string open = "", close = "";
         if (type && is_narrow_integer(type)) {
             open = "((" + gpu_type(type) + ")(";
             close = "))";
         }
-        src << name << "(" << open;
-        if (a) visit_expr(a);
-        src << close << ", " << open;
-        if (b) visit_expr(b);
-        src << close << ")";
+        if (args.empty()) return;
+        for (size_t i = 1; i < args.size(); i++) src << name << "(";
+        src << open;
+        if (args[0]) visit_expr(args[0]);
+        src << close;
+        for (size_t i = 1; i < args.size(); i++) {
+            src << ", " << open;
+            if (args[i]) visit_expr(args[i]);
+            src << close << ")";
+        }
     }
 
     // The unsigned integer type of the same width as gpu_type(type), for an
@@ -4252,6 +4257,8 @@ public:
     // Whether the kernel being written streams down rows of a matrix
     // (streams_strided_rows).
     bool kernel_streams_strided_rows = false;
+    // Whether the kernel has lanes that read vectors of 16 bytes.
+    bool kernel_lane_vectors = false;
 
     // Whether the kernel being written runs each iteration on lanes.
     bool kernel_has_lanes() const {
@@ -4521,7 +4528,7 @@ public:
             src << get_indent() << "const " << type_name << " " << trips
                 << " = " << end << " >= " << v << " ? (" << end << " - " << v
                 << ") / " << inc << " + 1 : 0;\n";
-            src << get_indent() << (wide ? dialect.unroll_wide_pragma()
+            src << get_indent() << (wide ? dialect.unroll_wide_pragma(kernel_lane_vectors)
                 : dialect.unroll_pragma(deep)) << "\n";
             src << get_indent() << "for (" << type_name << " " << count
                 << " = 0; " << count << " < " << trips << "; " << count
@@ -4529,7 +4536,7 @@ public:
             return;
         }
         if (pragma) {
-            src << get_indent() << (wide ? dialect.unroll_wide_pragma()
+            src << get_indent() << (wide ? dialect.unroll_wide_pragma(kernel_lane_vectors)
                 : dialect.unroll_pragma(deep)) << "\n";
         } else if (unroll_few && !dialect.unroll_few_pragma().empty()) {
             src << get_indent() << dialect.unroll_few_pragma() << "\n";
@@ -6028,8 +6035,15 @@ public:
                         visit_expr(fc->m_args[0].m_value);
                     }
                     src << ")";
-                } else if (fn_name.find("_lcompilers_int_") == 0 ||
-                           fn_name.find("_lcompilers_nint_") == 0) {
+                } else if (fn_name.find("_lcompilers_nint_") == 0) {
+                    // Rounds half away from zero, as Fortran does.
+                    std::string target = gpu_type(fc->m_type);
+                    src << "((" << target << ")round(";
+                    if (fc->n_args > 0 && fc->m_args[0].m_value) {
+                        visit_expr(fc->m_args[0].m_value);
+                    }
+                    src << "))";
+                } else if (fn_name.find("_lcompilers_int_") == 0) {
                     std::string target = gpu_type(fc->m_type);
                     src << "((" << target << ")";
                     if (fc->n_args > 0 && fc->m_args[0].m_value) {
@@ -6095,14 +6109,20 @@ public:
                     }
                 } else if (fn_name.find("_lcompilers_min_") == 0 ||
                            fn_name.find("_lcompilers_min0_") == 0) {
-                    emit_min_max("min", fc->m_type,
-                        fc->n_args > 0 ? fc->m_args[0].m_value : nullptr,
-                        fc->n_args > 1 ? fc->m_args[1].m_value : nullptr);
+                    {
+                        std::vector<ASR::expr_t*> margs;
+                        for (size_t i = 0; i < fc->n_args; i++)
+                            margs.push_back(fc->m_args[i].m_value);
+                        emit_min_max("min", fc->m_type, margs);
+                    }
                 } else if (fn_name.find("_lcompilers_max_") == 0 ||
                            fn_name.find("_lcompilers_max0_") == 0) {
-                    emit_min_max("max", fc->m_type,
-                        fc->n_args > 0 ? fc->m_args[0].m_value : nullptr,
-                        fc->n_args > 1 ? fc->m_args[1].m_value : nullptr);
+                    {
+                        std::vector<ASR::expr_t*> margs;
+                        for (size_t i = 0; i < fc->n_args; i++)
+                            margs.push_back(fc->m_args[i].m_value);
+                        emit_min_max("max", fc->m_type, margs);
+                    }
                 } else if (fn_name.find("_lcompilers_merge_") == 0) {
                     // merge(tsource, fsource, mask) -> (mask ? tsource : fsource)
                     src << "(";
@@ -6826,9 +6846,11 @@ public:
                 src << ")";
             }
         } else if (id == static_cast<int64_t>(IEF::Min)) {
-            emit_min_max("min", f->m_type, f->m_args[0], f->m_args[1]);
+            emit_min_max("min", f->m_type,
+                std::vector<ASR::expr_t*>(f->m_args, f->m_args + f->n_args));
         } else if (id == static_cast<int64_t>(IEF::Max)) {
-            emit_min_max("max", f->m_type, f->m_args[0], f->m_args[1]);
+            emit_min_max("max", f->m_type,
+                std::vector<ASR::expr_t*>(f->m_args, f->m_args + f->n_args));
         } else if (id == static_cast<int64_t>(IEF::Real)) {
             // Real cast: just emit the argument with a float cast
             src << "((" << gpu_type(f->m_type) << ")(";
