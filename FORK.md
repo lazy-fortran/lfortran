@@ -53,6 +53,9 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
 | lfortran/lfortran#17853 | real power with a negative integer exponent in its full range |
 | lfortran/lfortran#17854 | complex VALUE argument of bind(c) passed in memory (WebAssembly) |
 | lfortran/lfortran#17855 | integer power with a negative exponent for bases 1 and -1 |
+| lfortran/lfortran#17863 | `nearest(0, -1.0)` is the smallest negative subnormal, not NaN |
+| lfortran/lfortran#17864 | `scale(x, i)` by `ldexp` for real(4) and real(8), so that it does not overflow where the result is representable |
+| lfortran/lfortran#17865 | `spacing` of negative numbers, of `huge` and below `tiny` |
 
 Fixes in `main` that have no upstream pull request yet: static storage for
 main program variables (bf4b95bcc1), the names a cell defines, uses and
