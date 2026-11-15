@@ -14809,14 +14809,18 @@ public:
                 throw SemanticAbort();
             }
             type = ASRUtils::TYPE(ASR::make_Logical_t(al, loc, a_kind));
-            type = ASRUtils::make_Array_t_util(
-                al, loc, type, dims.p, dims.size(), abi, is_argument, ASR::array_physical_typeType::DescriptorArray, false, is_dimension_star);
+            if (is_assumed_rank) {
+                type = ASRUtils::TYPE(ASR::make_Array_t(al, loc, type, nullptr, 0, ASR::array_physical_typeType::AssumedRankArray, ASR::memory_spaceType::Global));
+            } else {
+                type = ASRUtils::make_Array_t_util(
+                    al, loc, type, dims.p, dims.size(), abi, is_argument, ASR::array_physical_typeType::DescriptorArray, false, is_dimension_star);
+            }
             if (is_pointer) {
                 type = ASRUtils::TYPE(ASR::make_Pointer_t(al, loc,
                     ASRUtils::type_get_past_allocatable(type)));
             }
         } else if (sym_type->m_type == AST::decl_typeType::TypeComplex) {
-            if (!is_derived_type && a_kind != 4 && a_kind != 8 && a_kind != 16) {
+            if (!is_derived_type && a_kind != 4 && a_kind != 8 && a_kind != 10 && a_kind != 16) {
                 diag.add(Diagnostic(
                     "Kind " + std::to_string(a_kind) + " is not supported for Complex",
                     Level::Error, Stage::Semantic, {
@@ -15031,7 +15035,9 @@ public:
                         type = ASRUtils::TYPE(ASR::make_Array_t(al, loc, type, nullptr, 0, ASR::array_physical_typeType::AssumedRankArray, ASR::memory_spaceType::Global));
                     } else {
                         type = ASRUtils::make_Array_t_util(
-                            al, loc, type, dims.p, dims.size(), abi, is_argument);
+                            al, loc, type, dims.p, dims.size(), abi, is_argument,
+                            ASR::array_physical_typeType::DescriptorArray, false,
+                            is_dimension_star);
                     }
                     if (is_pointer) {
                         type = ASRUtils::TYPE(ASR::make_Pointer_t(al, loc,
@@ -17201,6 +17207,57 @@ public:
         return kind;
     }
 
+    // The compile-time value of the substring `(start:end:step)` of a string
+    // whose compile-time value is `string_value`, or nullptr if the substring
+    // is not known at compile time. Substring bounds are character positions.
+    // For kind > 1 the value holds UTF-8, so whole characters are sliced.
+    ASR::expr_t* fold_substring_value(const Location& loc,
+            ASR::expr_t* string_value, ASR::expr_t* start, ASR::expr_t* end,
+            ASR::expr_t* step) {
+        if (string_value == nullptr ||
+                !ASR::is_a<ASR::StringConstant_t>(*string_value)) {
+            return nullptr;
+        }
+        ASR::StringConstant_t* string_constant =
+            ASR::down_cast<ASR::StringConstant_t>(string_value);
+        ASR::String_t* string_type =
+            ASRUtils::get_string_type(string_constant->m_type);
+        int64_t start_value = 0, end_value = 0, step_value = 0, string_len = 0;
+        if (!ASRUtils::extract_value(ASRUtils::expr_value(start), start_value) ||
+                !ASRUtils::extract_value(ASRUtils::expr_value(end), end_value) ||
+                !ASRUtils::extract_value(ASRUtils::expr_value(step), step_value) ||
+                !ASRUtils::extract_value(string_type->m_len, string_len) ||
+                step_value != 1) {
+            return nullptr;
+        }
+        // A substring whose end is before its start has zero length, whatever
+        // its bounds are. Any other out of bounds substring is not folded.
+        int64_t substring_len = 0;
+        if (start_value <= end_value) {
+            if (start_value < 1 || end_value > string_len) {
+                return nullptr;
+            }
+            substring_len = end_value - start_value + 1;
+        }
+        std::vector<std::string> characters = ASRUtils::string_value_characters(
+            string_constant->m_s, string_type->m_kind);
+        // A value shorter than the length of its type is blank padded
+        characters.resize(string_len, " ");
+        std::string substring;
+        for (int64_t i = start_value; i <= end_value; i++) {
+            substring += characters[i - 1];
+        }
+        ASR::ttype_t* int_type = ASRUtils::TYPE(ASR::make_Integer_t(al, loc,
+            compiler_options.po.default_integer_kind));
+        ASR::ttype_t* substring_type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+            string_type->m_kind,
+            ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, loc, substring_len,
+                int_type)),
+            ASR::ExpressionLength, ASR::DescriptorString));
+        return ASRUtils::EXPR(ASR::make_StringConstant_t(al, loc,
+            s2c(al, substring), substring_type));
+    }
+
     ASR::asr_t* create_ArrayRef(const Location &loc, AST::fnarg_t* m_args,
         size_t n_args, AST::fnarg_t* m_subargs, size_t n_subargs,
         ASR::expr_t* v_expr, ASR::symbol_t *v, ASR::symbol_t *f2) {
@@ -17540,8 +17597,14 @@ public:
                 step = ASRUtils::EXPR(tmp);
                 step = CastingUtil::perform_casting(step, int_type, al, loc);
 
+                // `arr_ref_val` is the value of the element, which is not the
+                // value of its substring
+                ASR::expr_t* section_value = fold_substring_value(loc,
+                    arr_ref_val, l, r, step);
                 ASR::ttype_t *string_tt;
-                {
+                if (section_value) {
+                    string_tt = ASRUtils::expr_type(section_value);
+                } else {
                     ASRUtils::ASRBuilder b(al, loc);
                     string_tt = ASRUtils::TYPE(ASR::make_String_t(
                         al, loc, ASRUtils::extract_kind_from_ttype_t(root_v_type),
@@ -17550,7 +17613,7 @@ public:
                         ASR::DescriptorString));
                 }
                 return ASR::make_StringSection_t(al, loc, array_item, l,
-                        r, ASRUtils::EXPR(tmp), string_tt, arr_ref_val);
+                        r, ASRUtils::EXPR(tmp), string_tt, section_value);
             } else {
                 ASR::ttype_t* final_type;
                 if (is_arg_array) {
@@ -18261,7 +18324,7 @@ public:
             if (expr == nullptr) {
                 ArrayConstructorScope array_constructor_scope(*this);
                 this->visit_expr(*x.m_args[i]);
-                expr = ASRUtils::EXPR(tmp);
+                expr = cast_assumed_rank_selector(ASRUtils::EXPR(tmp));
             }
 
             if( ASR::is_a<ASR::ImpliedDoLoop_t>(*expr) ) {
@@ -18383,7 +18446,44 @@ public:
             } else {
                 n_elements += 1;
             }
-            body.push_back(al, expr);
+            // The data of a constant array holds no real(10) or complex(10)
+            // elements: such a constant array, and such an implied do loop
+            // evaluated at compile time, are an
+            // ArrayConstructor of the constant elements, which stands for
+            // the array in a larger one.
+            std::function<bool(ASR::expr_t*)> push_constant_elements =
+                    [&](ASR::expr_t* element) -> bool {
+                ASR::expr_t* element_value = ASR::is_a<ASR::ImpliedDoLoop_t>(*element) ?
+                    ASR::down_cast<ASR::ImpliedDoLoop_t>(element)->m_value :
+                    ASRUtils::expr_value(element);
+                if (element_value == nullptr && ASR::is_a<ASR::Var_t>(*element)) {
+                    ASR::symbol_t* element_sym = ASRUtils::symbol_get_past_external(
+                        ASR::down_cast<ASR::Var_t>(element)->m_v);
+                    if (ASR::is_a<ASR::Variable_t>(*element_sym) &&
+                            ASR::down_cast<ASR::Variable_t>(element_sym)->m_storage == ASR::storage_typeType::Parameter) {
+                        element_value = ASR::down_cast<ASR::Variable_t>(element_sym)->m_symbolic_value;
+                    }
+                }
+                if (element_value == nullptr ||
+                        !ASR::is_a<ASR::ArrayConstructor_t>(*element_value)) {
+                    return false;
+                }
+                ASR::ArrayConstructor_t* values = ASR::down_cast<ASR::ArrayConstructor_t>(element_value);
+                ASR::ttype_t* values_type = ASRUtils::extract_type(values->m_type);
+                if (!(ASRUtils::is_real(*values_type) || ASRUtils::is_complex(*values_type)) ||
+                        ASRUtils::extract_kind_from_ttype_t(values_type) != 10) {
+                    return false;
+                }
+                for (size_t k = 0; k < values->n_args; k++) {
+                    if (!push_constant_elements(values->m_args[k])) {
+                        body.push_back(al, values->m_args[k]);
+                    }
+                }
+                return true;
+            };
+            if (!push_constant_elements(expr)) {
+                body.push_back(al, expr);
+            }
         }
 
         ASR::dimension_t dim;
@@ -20255,6 +20355,9 @@ public:
                     throw SemanticAbort();
                 }
                 ASR::asr_t* v_var = ASR::make_Var_t(al, loc, v);
+                if (dt_struct_n_args == 0) {
+                    v_var = &resolve_selector_object(ASRUtils::EXPR(v_var), loc)->base;
+                }
                 make_ArrayItem_from_struct_m_args(
                     dt_struct_m_args, dt_struct_n_args, ASRUtils::EXPR(v_var), v_var, loc);
                 // Wrap with Cast if this variable needs select type casting
@@ -22872,7 +22975,7 @@ public:
         }
         ASRUtils::set_kind_to_ttype_t(ret_type, max_ret_kind);
 
-        if (max_ret_kind != 16 && ASRUtils::all_args_evaluated(args)) {
+        if (!ASRUtils::is_wide_float_kind(max_ret_kind) && ASRUtils::all_args_evaluated(args)) {
             double re, im;
             ASRUtils::extract_value(ASRUtils::expr_value(args[0]), re);
             ASRUtils::extract_value(ASRUtils::expr_value(args[1]), im);
@@ -22885,7 +22988,7 @@ public:
         ASR::expr_t* re = CastingUtil::perform_casting(args[0], expected_arg_type, al, loc);
         ASR::expr_t* im = CastingUtil::perform_casting(args[1], expected_arg_type, al, loc);
 
-        if (max_ret_kind == 16 && ASRUtils::all_args_evaluated(args)) {
+        if (ASRUtils::is_wide_float_kind(max_ret_kind) && ASRUtils::all_args_evaluated(args)) {
             value = ASRUtils::EXPR(ASR::make_ComplexConstructor_t(al, loc, re, im,
                 ret_type, nullptr));
         }
@@ -25630,9 +25733,11 @@ public:
         try {
             if constexpr (std::is_same_v<T, ASR::expr_t*>) {
                 ASR::ttype_t* element_type = ASRUtils::extract_type(ASRUtils::expr_type(expr));
-                if ((ASRUtils::is_real(*element_type) || ASRUtils::is_complex(*element_type)) &&
-                        ASRUtils::extract_kind_from_ttype_t(element_type) == 16) {
-                    // A real(16) or complex(16) value is kept as the constant it evaluates to.
+                int element_kind = ASRUtils::extract_kind_from_ttype_t(element_type);
+                if ((ASRUtils::is_real(*element_type) && element_kind == 10) ||
+                        ((ASRUtils::is_real(*element_type) || ASRUtils::is_complex(*element_type)) &&
+                        element_kind == 16)) {
+                    // A real(10), real(16) or complex(16) value is kept as the constant it evaluates to.
                     visitor.value = nullptr;
                     visitor.visit_expr(*expr);
                     if (visitor.value == nullptr ||
@@ -25919,6 +26024,10 @@ public:
         }
         // check compiletime evaluation possibility
         bool is_compiletime = is_compiletime_implied_do_loop(idl, loop_vars);
+        // The data of a constant array holds no real(10) or complex(10)
+        // elements: the values of such a loop are kept as constant elements.
+        bool is_kind10_loop = (ASRUtils::is_real(*type) || ASRUtils::is_complex(*type)) &&
+                ASRUtils::extract_kind_from_ttype_t(type) == 10;
 
         if (is_compiletime && idl_nesting_level == 1) {
             std::vector<int64_t> loop_indices; // fill it with all zero
@@ -25931,7 +26040,28 @@ public:
             idl_not_evaluated = false;
             // TODO: handle multiple types
             // populate compiletime array
-            if (ASRUtils::is_integer(*type)) {
+            if (is_kind10_loop) {
+                Vec<ASR::expr_t*> array; array.reserve(al, 1);
+                populate_compiletime_array_for_idl(idl, array, loop_vars, loop_indices, curr_nesting_level, itr);
+                bool all_constant = !idl_not_evaluated;
+                for (int i = 0; all_constant && i < itr; i++) {
+                    all_constant = array.p[i] != nullptr;
+                }
+                if (all_constant) {
+                    Vec<ASR::dimension_t> dims; dims.reserve(al, 1);
+                    ASR::dimension_t dim; dim.loc = x.base.base.loc;
+                    ASR::ttype_t* int4 = ASRUtils::TYPE(ASR::make_Integer_t(al, x.base.base.loc, 4));
+                    dim.m_start = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, x.base.base.loc, 1, int4));
+                    dim.m_length = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al, x.base.base.loc, itr, int4));
+                    dims.push_back(al, dim);
+                    ASR::ttype_t* array_type = ASRUtils::TYPE(ASR::make_Array_t(al, x.base.base.loc,
+                        ASRUtils::extract_type(type), dims.p, dims.n,
+                        ASR::array_physical_typeType::FixedSizeArray, ASR::memory_spaceType::Global));
+                    idl->m_value = ASRUtils::EXPR(ASRUtils::make_ArrayConstructor_t_util(al,
+                        x.base.base.loc, array.p, itr, array_type, ASR::arraystorageType::ColMajor));
+                    tmp = (ASR::asr_t*) idl;
+                }
+            } else if (ASRUtils::is_integer(*type)) {
                 Vec<int> array; array.reserve(al, 1);
                 populate_compiletime_array_for_idl(idl, array, loop_vars, loop_indices, curr_nesting_level, itr);
                 data = &array.p[0];
@@ -26096,7 +26226,9 @@ public:
                     ASR::symbol_t *f2 = ASRUtils::symbol_get_past_external(v1);
                     tmp = create_ArrayRef(x.base.base.loc, x.m_member[0].m_args, x.m_member[0].n_args, nullptr, 0, nullptr, v1, f2);
                 } else {
-                    tmp = resolve_variable(x.base.base.loc, to_lower(x.m_member[0].m_name));
+                    tmp = &resolve_selector_object(ASRUtils::EXPR(resolve_variable(
+                        x.base.base.loc, to_lower(x.m_member[0].m_name))),
+                        x.base.base.loc)->base;
                 }
             } else {
                 // To use the following function, Don't use last member and use it as id instead.
@@ -28143,9 +28275,9 @@ public:
 
     void visit_BoolOp(const AST::BoolOp_t &x) {
         this->visit_expr(*x.m_left);
-        ASR::expr_t *left = ASRUtils::EXPR(tmp);
+        ASR::expr_t *left = cast_assumed_rank_selector(ASRUtils::EXPR(tmp));
         this->visit_expr(*x.m_right);
-        ASR::expr_t *right = ASRUtils::EXPR(tmp);
+        ASR::expr_t *right = cast_assumed_rank_selector(ASRUtils::EXPR(tmp));
         CommonVisitorMethods::visit_BoolOp(al, x, left, right, tmp, diag, boolop2str[x.m_op], current_scope, current_function_dependencies, current_module_dependencies);
     }
 
@@ -28248,6 +28380,29 @@ public:
         return ASRUtils::EXPR(ASRUtils::make_ArrayPhysicalCast_t_util(al,
             expr->base.loc, expr, ASR::array_physical_typeType::AssumedRankArray,
             ASR::array_physical_typeType::DescriptorArray, desc_type, nullptr));
+    }
+
+    // `base` is the object of a component reference or a type-bound
+    // procedure call, e.g. `x` in `x%v`. In a `rank (0)` block the selector
+    // is a scalar object; an assumed rank array outside of a rank block
+    // cannot be such a base (C838).
+    ASR::expr_t* resolve_selector_object(ASR::expr_t* base, const Location& loc) {
+        if (!ASRUtils::is_assumed_rank_array(ASRUtils::expr_type(base)) ||
+                !ASR::is_a<ASR::Var_t>(*base)) {
+            return base;
+        }
+        ASR::expr_t* selector = cast_assumed_rank_selector(base);
+        if (ASRUtils::is_assumed_rank_array(ASRUtils::expr_type(selector))) {
+            diag.add(Diagnostic("assumed-rank array '" + std::string(
+                ASRUtils::symbol_name(ASR::down_cast<ASR::Var_t>(base)->m_v)) +
+                "' cannot be used as the base of a component or binding reference",
+                Level::Error, Stage::Semantic, {Label("", {loc})}));
+            throw SemanticAbort();
+        }
+        if (ASRUtils::is_array(ASRUtils::expr_type(selector))) {
+            return base;
+        }
+        return selector;
     }
 
     // An assumed rank array that is not the selector of an enclosing
@@ -28365,11 +28520,11 @@ public:
     void visit_ConditionalExpr(const AST::ConditionalExpr_t &x) {
         reject_conditional_expr_in_restricted_context(x.base.base.loc);
         this->visit_expr(*x.m_test);
-        ASR::expr_t *test = ASRUtils::EXPR(tmp);
+        ASR::expr_t *test = cast_assumed_rank_selector(ASRUtils::EXPR(tmp));
         this->visit_expr(*x.m_body);
-        ASR::expr_t *body = ASRUtils::EXPR(tmp);
+        ASR::expr_t *body = cast_assumed_rank_selector(ASRUtils::EXPR(tmp));
         this->visit_expr(*x.m_orelse);
-        ASR::expr_t *orelse = ASRUtils::EXPR(tmp);
+        ASR::expr_t *orelse = cast_assumed_rank_selector(ASRUtils::EXPR(tmp));
         ensure_not_assumed_rank(test, "Conditional expression", x.base.base.loc);
         ensure_not_assumed_rank(body, "Conditional expression", x.base.base.loc);
         ensure_not_assumed_rank(orelse, "Conditional expression", x.base.base.loc);
@@ -29344,7 +29499,8 @@ public:
         ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_Complex_t(al, x.base.base.loc,
                 complex_kind));
         ASR::expr_t *value = nullptr;
-        if (re_value && im_value && complex_kind != 16) {
+        // A ComplexConstant holds no complex(10) value: see below.
+        if (re_value && im_value && complex_kind != 16 && complex_kind != 10) {
             double re_double;
             if (ASR::is_a<ASR::RealConstant_t>(*re_value)) {
                 re_double = ASR::down_cast<ASR::RealConstant_t>(re_value)->m_r;
@@ -29381,6 +29537,17 @@ public:
                         ASR::down_cast<ASR::RealConstant_t>(re16_value)),
                     ASRUtils::real_constant_get_r16(
                         ASR::down_cast<ASR::RealConstant_t>(im16_value)), type);
+            }
+        } else if (complex_kind == 10) {
+            // A ComplexConstant holds no complex(10) value. A constant such
+            // value is instead a constructor from the two real(10)
+            // constants: it is its own compile-time value.
+            ASR::ttype_t *part_type = ASRUtils::TYPE(ASR::make_Real_t(al, x.base.base.loc, complex_kind));
+            re = CastingUtil::perform_casting(re, part_type, al, x.base.base.loc);
+            im = CastingUtil::perform_casting(im, part_type, al, x.base.base.loc);
+            if (ASRUtils::expr_value(re) && ASRUtils::expr_value(im)) {
+                value = ASRUtils::EXPR(ASR::make_ComplexConstructor_t(al,
+                    x.base.base.loc, re, im, type, nullptr));
             }
         }
         tmp = ASR::make_ComplexConstructor_t(al, x.base.base.loc,

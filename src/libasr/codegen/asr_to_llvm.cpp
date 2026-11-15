@@ -700,7 +700,7 @@ public:
     llvm::BasicBlock *proc_return;
     std::string mangle_prefix;
     bool prototype_only;
-    llvm::StructType *complex_type_4, *complex_type_8, *complex_type_16;
+    llvm::StructType *complex_type_4, *complex_type_8, *complex_type_10, *complex_type_16;
     llvm::StructType *complex_type_4_ptr, *complex_type_8_ptr;
     llvm::Type* string_descriptor;
     llvm::PointerType *character_type;
@@ -787,6 +787,7 @@ public:
     struct CFIArrayWriteback {
         llvm::Value* internal_desc;
         llvm::Value* cfi_desc;
+        llvm::Value* is_absent;
         llvm::Type* internal_type;
         llvm::Type* el_type;
         int n_dims;
@@ -1921,6 +1922,18 @@ public:
         return "_lfortran_complex_" + op + "_" + std::to_string(kind * 8);
     }
 
+    // Whether `runtime_func_name` is the routine for `op` ("add", "sub",
+    // "mul" or "div") of any complex kind.
+    static bool is_complex_runtime_op(const std::string &runtime_func_name,
+            const std::string &op) {
+        for (int a_kind : {4, 8, 10, 16}) {
+            if (runtime_func_name == complex_runtime_name(op, a_kind)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     llvm::Value* lfortran_complex_bin_op(llvm::Value* left_arg, llvm::Value* right_arg,
                                          std::string runtime_func_name,
                                          llvm::Type* complex_type=nullptr)
@@ -1943,21 +1956,15 @@ public:
         llvm::Value* result_imag = nullptr;
 
         // Inline arithmetic for add, sub, mul, div; fallback to runtime for pow
-        if (runtime_func_name == "_lfortran_complex_add_32" ||
-            runtime_func_name == "_lfortran_complex_add_64" ||
-            runtime_func_name == "_lfortran_complex_add_128") {
+        if (is_complex_runtime_op(runtime_func_name, "add")) {
             // (a+bi) + (c+di) = (a+c) + (b+d)i
             result_real = builder->CreateFAdd(left_real, right_real);
             result_imag = builder->CreateFAdd(left_imag, right_imag);
-        } else if (runtime_func_name == "_lfortran_complex_sub_32" ||
-                   runtime_func_name == "_lfortran_complex_sub_64" ||
-                   runtime_func_name == "_lfortran_complex_sub_128") {
+        } else if (is_complex_runtime_op(runtime_func_name, "sub")) {
             // (a+bi) - (c+di) = (a-c) + (b-d)i
             result_real = builder->CreateFSub(left_real, right_real);
             result_imag = builder->CreateFSub(left_imag, right_imag);
-        } else if (runtime_func_name == "_lfortran_complex_mul_32" ||
-                   runtime_func_name == "_lfortran_complex_mul_64" ||
-                   runtime_func_name == "_lfortran_complex_mul_128") {
+        } else if (is_complex_runtime_op(runtime_func_name, "mul")) {
             // (a+bi) * (c+di) = (ac-bd) + (ad+bc)i
             llvm::Value* ac = builder->CreateFMul(left_real, right_real);
             llvm::Value* bd = builder->CreateFMul(left_imag, right_imag);
@@ -1965,9 +1972,7 @@ public:
             llvm::Value* bc = builder->CreateFMul(left_imag, right_real);
             result_real = builder->CreateFSub(ac, bd);
             result_imag = builder->CreateFAdd(ad, bc);
-        } else if (runtime_func_name == "_lfortran_complex_div_32" ||
-                   runtime_func_name == "_lfortran_complex_div_64" ||
-                   runtime_func_name == "_lfortran_complex_div_128") {
+        } else if (is_complex_runtime_op(runtime_func_name, "div")) {
             auto create_fabs = [&](llvm::Value* value) -> llvm::Value* {
 #if LLVM_VERSION_MAJOR >= 12
                 return builder->CreateUnaryIntrinsic(llvm::Intrinsic::fabs, value);
@@ -2403,6 +2408,7 @@ public:
         // %complex = type { float, float }
         complex_type_4 = llvm_utils->complex_type_4;
         complex_type_8 = llvm_utils->complex_type_8;
+        complex_type_10 = llvm_utils->complex_type_10;
         complex_type_16 = llvm_utils->complex_type_16;
         complex_type_4_ptr = llvm_utils->complex_type_4_ptr;
         complex_type_8_ptr = llvm_utils->complex_type_8_ptr;
@@ -3712,6 +3718,23 @@ public:
             if(ASRUtils::is_array(ASRUtils::expr_type(x.m_vars[i]))){
                 llvm::Type* x_m_vars_type = llvm_utils->get_type_from_ttype_t_util(x.m_vars[i],
                     ASRUtils::expr_type(x.m_vars[i]), module.get());
+                if (ASRUtils::is_pointer(sym_type) &&
+                        ASRUtils::is_assumed_rank_array(sym_type)) {
+                    // The descriptor may be absent entirely; release any
+                    // owned class wrapper before clearing the pointer slot.
+                    if (ASRUtils::is_class_type(ASRUtils::extract_type(sym_type))) {
+                        llvm::Value* desc = llvm_utils->CreateLoad2(x_m_vars_type, target);
+                        llvm_utils->create_if_else(builder->CreateIsNotNull(desc), [&]() {
+                            llvm::Value* data_ptr = arr_descr->get_pointer_to_data(
+                                x.m_vars[i], ASRUtils::expr_type(x.m_vars[i]),
+                                desc, module.get());
+                            free_owned_class_array_wrapper(x.m_vars[i], data_ptr);
+                        }, [](){});
+                    }
+                    builder->CreateStore(llvm::ConstantPointerNull::get(
+                        llvm::cast<llvm::PointerType>(x_m_vars_type)), target);
+                    continue;
+                }
                 llvm::Value* target_ = llvm_utils->CreateLoad2(x_m_vars_type, target);
                 llvm::Value* data_ptr = arr_descr->get_pointer_to_data(x.m_vars[i], ASRUtils::expr_type(x.m_vars[i]), target_ , module.get());
                 free_owned_class_array_wrapper(x.m_vars[i], data_ptr);
@@ -3719,6 +3742,10 @@ public:
                     llvm::ConstantPointerNull::get(llvm_utils->get_el_type(x.m_vars[i],
                         ASRUtils::extract_type(ASRUtils::expr_type(x.m_vars[i])), module.get())->getPointerTo())
                     , data_ptr);
+                // A disassociated array has a zero offset, so that its
+                // data pointer stays NULL when passed on by address.
+                builder->CreateStore(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0),
+                    arr_descr->get_offset(tp, target_, false));
             } else if(ASRUtils::is_string_only(ASRUtils::expr_type(x.m_vars[i]))) {
                 llvm::Value* np = llvm::ConstantPointerNull::get(llvm::Type::getInt8Ty(context)->getPointerTo());
                 llvm::Value* data_target = llvm_utils->create_gep2(llvm_utils->get_type_from_ttype_t_util(x.m_vars[i],
@@ -6948,7 +6975,7 @@ public:
                 ASR::ComplexConstant_t* comp_const = ASR::down_cast<ASR::ComplexConstant_t>(elem);
                 llvm::Constant *re, *im;
                 llvm::StructType* struct_type;
-                if (a_kind != 4 && a_kind != 8 && a_kind != 16) {
+                if (a_kind != 4 && a_kind != 8 && a_kind != 10 && a_kind != 16) {
                     throw CodeGenError("Complex kind " + std::to_string(a_kind) + " not supported in array initializer");
                 }
                 re = complex_part_constant(comp_const, false, a_kind);
@@ -8415,8 +8442,9 @@ public:
 
             if (!external) {
                 double x_re = 0.0, x_im = 0.0;
-                if (x.m_value && ASR::is_a<ASR::ComplexConstant_t>(*x.m_value) &&
-                        a_kind == 16) {
+                if (x.m_value && ((ASR::is_a<ASR::ComplexConstant_t>(*x.m_value) &&
+                        a_kind == 16) ||
+                        ASR::is_a<ASR::ComplexConstructor_t>(*x.m_value))) {
                     init_value = create_llvm_constant_from_asr_expr(x.m_value, x.m_type);
                     if (!init_value) {
                         throw CodeGenError("cannot create a constant initializer for complex variable '"
@@ -8441,6 +8469,12 @@ public:
                             re = llvm::ConstantFP::get(context, llvm::APFloat((double) x_re));
                             im = llvm::ConstantFP::get(context, llvm::APFloat((double) x_im));
                             type = complex_type_8;
+                            break;
+                        }
+                        case 10: {
+                            re = llvm::ConstantFP::get(llvm_utils->getFPType(10), x_re);
+                            im = llvm::ConstantFP::get(llvm_utils->getFPType(10), x_im);
+                            type = complex_type_10;
                             break;
                         }
                         case 16: {
@@ -9959,8 +9993,33 @@ public:
                     llvm::APInt bits(128, llvm::ArrayRef<uint64_t>(words, 2));
                     return llvm::ConstantFP::get(context,
                         llvm::APFloat(llvm::APFloat::IEEEquad(), bits));
+                } else if (ASRUtils::extract_kind_from_ttype_t(rc->m_type) == 10 &&
+                        llvm_type == llvm_utils->getFPType(10)) {
+                    llvm::APFloat apf = host_long_double_to_apfloat(
+                        ASRUtils::real_constant_get_r10_bytes(rc));
+                    bool loses_info;
+                    apf.convert(llvm_type->getFltSemantics(),
+                        llvm::APFloat::rmNearestTiesToEven, &loses_info);
+                    return llvm::ConstantFP::get(context, apf);
                 }
                 break;
+            }
+            case ASR::exprType::ComplexConstructor: {
+                ASR::ComplexConstructor_t* cc = ASR::down_cast<ASR::ComplexConstructor_t>(expr);
+                int cc_kind = ASRUtils::extract_kind_from_ttype_t(cc->m_type);
+                // A constant complex(10) value is a constructor from two
+                // real(10) constants.
+                if (cc_kind != 10) {
+                    break;
+                }
+                ASR::ttype_t* part_type = ASRUtils::TYPE(ASR::make_Real_t(al, expr->base.loc, cc_kind));
+                llvm::Constant* re = create_llvm_constant_from_asr_expr(cc->m_re, part_type);
+                llvm::Constant* im = create_llvm_constant_from_asr_expr(cc->m_im, part_type);
+                if (re == nullptr || im == nullptr) {
+                    break;
+                }
+                return llvm::ConstantStruct::get(
+                    llvm::cast<llvm::StructType>(llvm_utils->getComplexType(cc_kind)), {re, im});
             }
             case ASR::exprType::ComplexConstant: {
                 ASR::ComplexConstant_t* cc = ASR::down_cast<ASR::ComplexConstant_t>(expr);
@@ -9974,6 +10033,12 @@ public:
                         complex_type = complex_type_4;
                         re = llvm::ConstantFP::get(context, llvm::APFloat(static_cast<float>(cc->m_re)));
                         im = llvm::ConstantFP::get(context, llvm::APFloat(static_cast<float>(cc->m_im)));
+                        break;
+                    }
+                    case 10: {
+                        complex_type = complex_type_10;
+                        re = llvm::ConstantFP::get(llvm_utils->getFPType(10), cc->m_re);
+                        im = llvm::ConstantFP::get(llvm_utils->getFPType(10), cc->m_im);
                         break;
                     }
                     case 16: {
@@ -11329,6 +11394,7 @@ public:
             llvm::StructType *st = it.getStructTypeOrNull();
             if (st != nullptr && st != llvm_utils->complex_type_4 &&
                     st != llvm_utils->complex_type_8 &&
+                    st != llvm_utils->complex_type_10 &&
                     st != llvm_utils->complex_type_16) {
                 return false;
             }
@@ -12563,7 +12629,7 @@ public:
             }
             llvm::Value* cfi_result = arr_descr->internal_to_cfi(
                 info.desc_array_type, internal_ptr, info.el_type, info.n_dims,
-                el_size, info.type_code, info.cfi_attr);
+                el_size, info.type_code, info.cfi_attr, false);
             // Copy CFI data back to the original CFI descriptor
             llvm::StructType* cfi_type = arr_descr->get_cfi_type(info.el_type, info.n_dims);
             uint64_t cfi_size = dl.getTypeAllocSize(cfi_type);
@@ -12645,7 +12711,7 @@ public:
                             tmp = llvm_utils->CreateLoad2(type_fx2, tmp);
                         }
                     } else {
-                        LCOMPILERS_ASSERT(c_kind == 8 || c_kind == 16)
+                        LCOMPILERS_ASSERT(c_kind == 8 || c_kind == 10 || c_kind == 16)
                         if (c_kind == 8 && compiler_options.platform == Platform::Windows) {
                             // 128 bit aggregate type is passed by reference
                         } else {
@@ -12872,6 +12938,13 @@ public:
         ASR::Variable_t* v = ASR::down_cast<ASR::Variable_t>(sym);
         if (!ASRUtils::is_assumed_type_dummy(v) ||
                 !ASRUtils::is_unlimited_polymorphic_type(ASRUtils::extract_type(v->m_type))) {
+            return value;
+        }
+        if (ASRUtils::is_array(v->m_type) &&
+                !ASRUtils::is_assumed_rank_array(v->m_type) &&
+                ASRUtils::extract_physical_type(v->m_type) !=
+                    ASR::array_physical_typeType::DescriptorArray) {
+            // A `type(*) a(*)` dummy is already the plain data address.
             return value;
         }
         ASR::ttype_t* t = ASRUtils::type_get_past_allocatable_pointer(v->m_type);
@@ -13180,6 +13253,31 @@ public:
                 ASRUtils::extract_type(p_type), module.get());
             ptr = llvm_utils->CreateLoad2(ptr_array_inner_type->getPointerTo(), ptr);
             // The data of a polymorphic pointer array is its class wrapper.
+            ptr_is_class_array = x.m_tgt
+                && ASRUtils::is_class_type(ASRUtils::extract_type(p_type));
+        } else if( ASRUtils::is_array(p_type) &&
+            !ASRUtils::is_array_of_strings(p_type) &&
+            ASRUtils::extract_physical_type(p_type) ==
+            ASR::array_physical_typeType::AssumedRankArray ) {
+            // An assumed-rank pointer dummy is associated with a descriptor
+            // even when its actual argument is disassociated, so the data
+            // of a non-null descriptor is what is tested.
+            LCOMPILERS_ASSERT(ASR::is_a<ASR::Pointer_t>(*p_type));
+            ptr_array_inner_type = llvm_utils->get_type_from_ttype_t_util(x.m_ptr,
+                ASRUtils::extract_type(p_type), module.get());
+            llvm::Value* data = llvm_utils->CreateAlloca(
+                ptr_array_inner_type->getPointerTo(), nullptr, "assumed_rank_data");
+            builder->CreateStore(llvm::ConstantPointerNull::get(
+                ptr_array_inner_type->getPointerTo()), data);
+            llvm::Value* descriptor = ptr;
+            llvm_utils->create_if_else(builder->CreateIsNotNull(descriptor), [&]() {
+                builder->CreateStore(llvm_utils->CreateLoad2(
+                    ptr_array_inner_type->getPointerTo(),
+                    arr_descr->get_pointer_to_data(x.m_ptr,
+                        ASRUtils::type_get_past_allocatable_pointer(p_type),
+                        descriptor, module.get())), data);
+            }, []() {});
+            ptr = llvm_utils->CreateLoad2(ptr_array_inner_type->getPointerTo(), data);
             ptr_is_class_array = x.m_tgt
                 && ASRUtils::is_class_type(ASRUtils::extract_type(p_type));
         }
@@ -14018,6 +14116,17 @@ public:
         });
     }
 
+    // An allocatable or pointer assumed-rank variable is visited as the
+    // address of its descriptor pointer; load it to get the descriptor.
+    void load_assumed_rank_descriptor(ASR::expr_t* expr, ASR::ttype_t* type,
+            llvm::Value*& llvm_value) {
+        if (LLVM::is_llvm_pointer(*type)) {
+            llvm_value = llvm_utils->CreateLoad2(
+                llvm_utils->get_type_from_ttype_t_util(expr, type, module.get()),
+                llvm_value);
+        }
+    }
+
     void visit_Associate(const ASR::Associate_t& x) {
         if (x.m_form != ASR::pointer_bounds_formType::NoPointerBounds) {
             handle_pointer_section_target(x);
@@ -14178,6 +14287,7 @@ public:
                 // but `assoc` is a scalar class pointer. Associate the scalar wrapper pointer
                 // (descriptor.data) rather than bitcasting the whole descriptor.
                 LCOMPILERS_ASSERT(ASRUtils::is_class_type(ASRUtils::extract_type(value_type)))
+                load_assumed_rank_descriptor(x.m_value, value_type, llvm_value);
                 llvm::Type* const array_desc_type = llvm_utils->arr_api->
                     get_array_type(x.m_value, ASRUtils::type_get_past_allocatable_pointer(value_type),
                         llvm_utils->get_el_type(x.m_value, ASRUtils::extract_type(value_type), module.get()), false);
@@ -14210,6 +14320,7 @@ public:
                        ASRUtils::is_array(value_type) &&
                        ASRUtils::is_class_type(ASRUtils::extract_type(value_type)) &&
                        ASRUtils::extract_physical_type(value_type) == ASR::array_physical_typeType::AssumedRankArray) {
+                load_assumed_rank_descriptor(x.m_value, value_type, llvm_value);
                 llvm::Type* const array_desc_type = llvm_utils->arr_api->
                     get_array_type(x.m_value, ASRUtils::type_get_past_allocatable_pointer(value_type),
                         llvm_utils->get_el_type(x.m_value, ASRUtils::extract_type(value_type), module.get()), false);
@@ -14722,6 +14833,15 @@ public:
                                         // Simple bitcast if element types differ
                                         loaded_data_ptr = builder->CreateBitCast(loaded_data_ptr, target_el_type->getPointerTo());
                                         builder->CreateStore(loaded_data_ptr, target_data_ptr);
+                                    }
+
+                                    // The pointer owns a different class wrapper, but
+                                    // its descriptor retains the source's dynamic
+                                    // element size, type and other scalar metadata.
+                                    if (target_is_class && source_is_class) {
+                                        arr_descr->copy_scalar_metadata(
+                                            value_array_desc_type, llvm_value,
+                                            target_array_desc_type, llvm_target_);
                                     }
                                     
                                     // Deep Copy dimension descriptors (inline)
@@ -17314,6 +17434,14 @@ public:
                 tmp = llvm_utils->create_gep2(str_desc, tmp, 0);
                 tmp = llvm_utils->CreateLoad2(llvm::Type::getInt8Ty(context)->getPointerTo(),tmp);
             }
+        } else if (
+            m_new == ASR::array_physical_typeType::StringArraySinglePointer &&
+            m_old == ASR::array_physical_typeType::AssumedRankArray) {
+            llvm::Value* data_loaded = llvm_utils->CreateLoad2(
+                data_type->getPointerTo(),
+                arr_descr->get_pointer_to_data(arr_type, arg));
+            tmp = llvm_utils->get_string_data(
+                ASRUtils::get_string_type(ASRUtils::expr_type(m_arg)), data_loaded);
         } else if (
             m_new == ASR::array_physical_typeType::DescriptorArray &&
             m_old == ASR::array_physical_typeType::AssumedRankArray) {
@@ -20264,6 +20392,12 @@ public:
                 type = complex_type_8;
                 break;
             }
+            case 10: {
+                re2 = builder->CreateFPExt(re_val, llvm_utils->getFPType(10));
+                im2 = builder->CreateFPExt(im_val, llvm_utils->getFPType(10));
+                type = complex_type_10;
+                break;
+            }
             case 16: {
                 re2 = builder->CreateFPExt(re_val, llvm_utils->getFPType(16));
                 im2 = builder->CreateFPExt(im_val, llvm_utils->getFPType(16));
@@ -20294,6 +20428,12 @@ public:
                 re2 = llvm::ConstantFP::get(context, llvm::APFloat(re));
                 im2 = llvm::ConstantFP::get(context, llvm::APFloat(im));
                 type = complex_type_8;
+                break;
+            }
+            case 10: {
+                re2 = llvm::ConstantFP::get(llvm_utils->getFPType(10), re);
+                im2 = llvm::ConstantFP::get(llvm_utils->getFPType(10), im);
+                type = complex_type_10;
                 break;
             }
             case 16: {
@@ -20685,7 +20825,7 @@ public:
         ASR::ttype_t* curr_type = extract_ttype_t_from_expr(x.m_arg);
         int arg_kind = ASRUtils::extract_kind_from_ttype_t(curr_type);
         llvm::Value *re;
-        if (arg_kind == 4 || arg_kind == 8 || arg_kind == 16) {
+        if (arg_kind == 4 || arg_kind == 8 || arg_kind == 10 || arg_kind == 16) {
             re = complex_re(tmp, llvm_utils->getComplexType(arg_kind));
         } else {
             std::string msg = "Complex kind " + std::to_string(arg_kind) + " not implemented yet.";
@@ -20711,7 +20851,7 @@ public:
         ASR::ttype_t* curr_type = extract_ttype_t_from_expr(x.m_arg);
         int arg_kind = ASRUtils::extract_kind_from_ttype_t(curr_type);
         llvm::Value *im;
-        if (arg_kind == 4 || arg_kind == 8 || arg_kind == 16) {
+        if (arg_kind == 4 || arg_kind == 8 || arg_kind == 10 || arg_kind == 16) {
             im = complex_im(tmp, llvm_utils->getComplexType(arg_kind));
         } else {
             std::string msg = "Complex kind " + std::to_string(arg_kind) + " not implemented yet.";
@@ -21124,13 +21264,18 @@ public:
                         tmp = builder->CreateFPExt(tmp, llvm::Type::getDoubleTy(context));
                         zero = llvm::ConstantFP::get(context, llvm::APFloat(0.0));
                         break;
+                    case 10:
+                        target_type = complex_type_10;
+                        tmp = builder->CreateFPExt(tmp, llvm_utils->getFPType(10));
+                        zero = llvm::ConstantFP::get(llvm_utils->getFPType(10), 0.0);
+                        break;
                     case 16:
                         target_type = complex_type_16;
                         tmp = builder->CreateFPExt(tmp, llvm_utils->getFPType(16));
                         zero = llvm::ConstantFP::get(llvm_utils->getFPType(16), 0.0);
                         break;
                     default:
-                        throw CodeGenError("Only 32, 64 and 128 bits real kinds are supported.");
+                        throw CodeGenError("Only 32, 64, 80 and 128 bits real kinds are supported.");
                 }
                 tmp = complex_from_floats(tmp, zero, target_type);
                 break;
@@ -21152,13 +21297,18 @@ public:
                         complex_type = complex_type_8;
                         zero = llvm::ConstantFP::get(context, llvm::APFloat(0.0));
                         break;
+                    case 10:
+                        target_type = llvm_utils->getFPType(10);
+                        complex_type = complex_type_10;
+                        zero = llvm::ConstantFP::get(llvm_utils->getFPType(10), 0.0);
+                        break;
                     case 16:
                         target_type = llvm_utils->getFPType(16);
                         complex_type = complex_type_16;
                         zero = llvm::ConstantFP::get(llvm_utils->getFPType(16), 0.0);
                         break;
                     default:
-                        throw CodeGenError("Only 32, 64 and 128 bits real kinds are supported.");
+                        throw CodeGenError("Only 32, 64, 80 and 128 bits real kinds are supported.");
                 }
                 tmp = builder->CreateSIToFP(tmp, target_type);
                 tmp = complex_from_floats(tmp, zero, complex_type);
@@ -21214,11 +21364,7 @@ public:
                 ASR::ttype_t* curr_type = extract_ttype_t_from_expr(x.m_arg);
                 LCOMPILERS_ASSERT(curr_type != nullptr)
                 int a_kind = ASRUtils::extract_kind_from_ttype_t(curr_type);
-                if (a_kind == 4) {
-                    zero = llvm::ConstantFP::get(context, llvm::APFloat((float)0.0));
-                } else {
-                    zero = llvm::ConstantFP::get(context, llvm::APFloat(0.0));
-                }
+                zero = llvm::ConstantFP::get(llvm_utils->getFPType(a_kind), 0.0);
                 llvm::Value *c_real = complex_re(tmp, tmp->getType());
                 llvm::Value *real_check = builder->CreateFCmpUEQ(c_real, zero);
                 llvm::Value *c_imag = complex_im(tmp, tmp->getType());
@@ -21340,8 +21486,8 @@ public:
                 if( arg_kind > 0 && dest_kind > 0 &&
                     arg_kind != dest_kind )
                 {
-                    if ((arg_kind == 4 || arg_kind == 8 || arg_kind == 16) &&
-                            (dest_kind == 4 || dest_kind == 8 || dest_kind == 16)) {
+                    if ((arg_kind == 4 || arg_kind == 8 || arg_kind == 10 || arg_kind == 16) &&
+                            (dest_kind == 4 || dest_kind == 8 || dest_kind == 10 || dest_kind == 16)) {
                         target_type = llvm_utils->getComplexType(dest_kind);
                         llvm::Type *dest_fp = llvm_utils->getFPType(dest_kind);
                         re = builder->CreateFPCast(
@@ -21365,8 +21511,8 @@ public:
                 llvm::Value *re;
                 if( arg_kind > 0 && dest_kind > 0)
                 {
-                    if ((arg_kind == 4 || arg_kind == 8 || arg_kind == 16) &&
-                            (dest_kind == 4 || dest_kind == 8 || dest_kind == 16)) {
+                    if ((arg_kind == 4 || arg_kind == 8 || arg_kind == 10 || arg_kind == 16) &&
+                            (dest_kind == 4 || dest_kind == 8 || dest_kind == 10 || dest_kind == 16)) {
                         re = complex_re(tmp, llvm_utils->getComplexType(arg_kind));
                         tmp = builder->CreateFPCast(re, llvm_utils->getFPType(dest_kind));
                     } else {
@@ -21392,6 +21538,9 @@ public:
                     } else if (arg_kind == 8) {
                         // complex(8) -> real(8)
                         re = complex_re(tmp, complex_type_8);
+                        tmp = re;
+                    } else if (arg_kind == 10) {
+                        re = complex_re(tmp, complex_type_10);
                         tmp = re;
                     } else if (arg_kind == 16) {
                         re = complex_re(tmp, complex_type_16);
@@ -22326,6 +22475,9 @@ public:
                 } else if (a_kind == 8) {
                     runtime_func_name = "_lfortran_read_complex_double";
                     type_arg = complex_type_8;
+                } else if (a_kind == 10) {
+                    runtime_func_name = "_lfortran_read_complex_float80";
+                    type_arg = complex_type_10;
                 } else if (a_kind == 16) {
                     runtime_func_name = "_lfortran_read_complex_float128";
                     type_arg = complex_type_16;
@@ -22384,6 +22536,9 @@ public:
                     } else if ( a_kind == 8 ) {
                         runtime_func_name = "_lfortran_read_array_complex_double";
                         type_arg = complex_type_8;
+                    } else if ( a_kind == 10 ) {
+                        runtime_func_name = "_lfortran_read_array_complex_float80";
+                        type_arg = complex_type_10;
                     } else if ( a_kind == 16 ) {
                         runtime_func_name = "_lfortran_read_array_complex_float128";
                         type_arg = complex_type_16;
@@ -23822,6 +23977,7 @@ public:
         constexpr int32_t kFloat = 4;
         constexpr int32_t kDouble = 5;
         constexpr int32_t kQuad = 14;
+        constexpr int32_t kExtended = 16;
         constexpr int32_t kWideChar = 8;
 
         if (ASR::is_a<ASR::String_t>(*val_type)) {
@@ -23842,7 +23998,8 @@ public:
         } else if (ASR::is_a<ASR::Complex_t>(*val_type)) {
             ASR::Complex_t* complex_type = ASR::down_cast<ASR::Complex_t>(val_type);
             int32_t component_type_code = (complex_type->m_kind == 4) ? kFloat
-                : (complex_type->m_kind == 16) ? kQuad : kDouble;
+                : (complex_type->m_kind == 16) ? kQuad
+                : (complex_type->m_kind == 10) ? kExtended : kDouble;
             llvm::Type* llvm_complex_type = llvm_utils->getComplexType(complex_type->m_kind);
             llvm::Value* re_ptr = builder->CreateStructGEP(llvm_complex_type, elem_ptr, 0);
             llvm::Value* im_ptr = builder->CreateStructGEP(llvm_complex_type, elem_ptr, 1);
@@ -25894,6 +26051,12 @@ public:
                 // The runtime reverses the bytes of every element on a unit
                 // opened with a non-native CONVERT=: a complex value is two
                 // reals and a character is one code unit of its kind.
+                if (kind == 10 && ASR::is_a<ASR::Complex_t>(*value_type_base)) {
+                    // A complex(10) is written as its in-memory storage (two
+                    // padded x87 values), as GFortran does and the read expects.
+                    kind = (int) module->getDataLayout().getTypeAllocSize(
+                        llvm_utils->getFPType(10));
+                }
                 llvm::Value* elem_size_val = llvm::ConstantInt::get(context, llvm::APInt(32, kind, true));
                 if (ASR::is_a<ASR::Complex_t>(*value_type_base)) {
                     kind *= 2;
@@ -26245,7 +26408,12 @@ public:
                     break;
                 }
                 case ASR::ttypeType::Complex: {
-                    walked_size = 2 * (int64_t) ASRUtils::extract_kind_from_ttype_t(type);
+                    int a_kind = ASRUtils::extract_kind_from_ttype_t(type);
+                    if( a_kind == 10 ) {
+                        walked_size_known = false;
+                    } else {
+                        walked_size = 2 * (int64_t) a_kind;
+                    }
                     break;
                 }
                 case ASR::ttypeType::String: {
@@ -27094,7 +27262,7 @@ public:
                                                     tmp = llvm_utils->CreateLoad2(type_fx2, c32_as_vec2_ptr);
                                                 }
                                             } else {
-                                                LCOMPILERS_ASSERT(c_kind == 8 || c_kind == 16)
+                                                LCOMPILERS_ASSERT(c_kind == 8 || c_kind == 10 || c_kind == 16)
                                                 if (c_kind == 8 && compiler_options.platform == Platform::Windows) {
                                                     // 128 bit aggregate type is passed by reference
                                                 } else {
@@ -27287,11 +27455,16 @@ public:
                     // When the formal is a pointer type but the actual is not,
                     // wrap the value with an extra pointer level. Skip this when
                     // the formal is a class type — convert_to_polymorphic_arg
-                    // handles the pointer level during class wrapping.
+                    // handles the pointer level during class wrapping, and
+                    // when a scalar is passed to an assumed-rank dummy: it is
+                    // wrapped in a descriptor below, which needs the scalar
+                    // itself.
                     if (orig_arg &&
                         LLVM::is_llvm_pointer(*orig_arg->m_type) &&
                         !LLVM::is_llvm_pointer(*arg->m_type) &&
-                        !ASRUtils::is_class_type(ASRUtils::type_get_past_allocatable_pointer(orig_arg->m_type))) {
+                        !ASRUtils::is_class_type(ASRUtils::type_get_past_allocatable_pointer(orig_arg->m_type)) &&
+                        !(ASRUtils::is_assumed_rank_array(orig_arg->m_type) &&
+                          !ASRUtils::is_array(arg->m_type))) {
                         if (tmp->getType()->isIntegerTy(1) &&
                             ASRUtils::is_logical(*arg->m_type)) {
                             int kind = ASRUtils::extract_kind_from_ttype_t(arg->m_type);
@@ -27953,6 +28126,23 @@ public:
                 ASRUtils::is_assumed_rank_array(orig_arg->m_type)) {
                 skip_polymorphic_conversion = true;
             }
+            // A `type(*) buf(*)` dummy is a plain data address: it carries no
+            // type information, so the actual is not wrapped.
+            if (orig_arg &&
+                    ASRUtils::is_assumed_type_dummy(orig_arg) &&
+                    ASRUtils::is_array(orig_arg->m_type) &&
+                    !ASRUtils::is_assumed_rank_array(orig_arg->m_type) &&
+                    ASRUtils::extract_physical_type(orig_arg->m_type) !=
+                        ASR::array_physical_typeType::DescriptorArray) {
+                skip_polymorphic_conversion = true;
+                llvm::Type* expected_type = llvm_utils->get_type_from_ttype_t_util(
+                    orig_arg->m_type, orig_arg->m_type_declaration, module.get());
+                if (expected_type->isPointerTy()) {
+                    tmp = builder->CreateBitCast(tmp, expected_type);
+                } else {
+                    tmp = builder->CreateBitCast(tmp, expected_type->getPointerTo());
+                }
+            }
             if( orig_arg && !skip_polymorphic_conversion ) {
                 tmp = convert_to_polymorphic_arg(x.m_args[i].m_value, tmp, orig_arg,
                     ASRUtils::type_get_past_allocatable(
@@ -27961,35 +28151,26 @@ public:
                         ASRUtils::type_get_past_pointer(ASRUtils::expr_type(x.m_args[i].m_value))));
             }
 
-            // For assumed-rank parameters, bitcast the descriptor pointer
-            // to match the function signature (all descriptor types share
-            // the same layout; the callee reads the rank field to determine
-            // how many dim entries are valid).
+            // A scalar passed to a Fortran pointer/allocatable assumed-rank
+            // dummy has a freshly constructed descriptor, but the dummy ABI
+            // expects the address of a descriptor pointer. Array actuals
+            // already supply that slot; bind(C) instead takes one CFI pointer.
             if (orig_arg &&
-                    ASRUtils::is_assumed_rank_array(orig_arg->m_type)) {
+                    ASRUtils::is_assumed_rank_array(orig_arg->m_type) &&
+                    x_abi != ASR::abiType::BindC) {
                 llvm::Type* expected_desc_type = llvm_utils->get_type_from_ttype_t_util(
                     orig_arg->m_type, orig_arg->m_type_declaration, module.get());
                 if (tmp == scalar_assumed_rank_desc &&
-                        x_abi != ASR::abiType::BindC &&
                         LLVM::is_llvm_pointer(*orig_arg->m_type)) {
-                    // An allocatable or pointer assumed-rank dummy takes a
-                    // pointer to the caller's descriptor pointer (a bind(C)
-                    // one takes the descriptor itself). A scalar
-                    // actual is wrapped in a fresh descriptor, so store its
-                    // address in a slot rather than punning the descriptor
-                    // itself as a pointer to a pointer. Decide this from the
-                    // dummy's type: with opaque pointers both LLVM types are
-                    // the same `ptr`.
                     llvm::Value* desc_slot = llvm_utils->CreateAlloca(
-                        expected_desc_type, nullptr,
-                        "assumed_rank_desc");
+                        expected_desc_type, nullptr, "assumed_rank_desc");
                     builder->CreateStore(
                         builder->CreateBitCast(tmp, expected_desc_type),
                         desc_slot);
                     tmp = desc_slot;
-                } else if (tmp->getType() != expected_desc_type->getPointerTo()) {
-                    tmp = builder->CreateBitCast(tmp, expected_desc_type->getPointerTo());
                 }
+                tmp = builder->CreateBitCast(tmp,
+                    expected_desc_type->getPointerTo());
             }
 
             // For bind(c) character array arguments passed as Var, extract the raw data pointer
@@ -28173,6 +28354,19 @@ public:
                                 ASRUtils::type_get_past_pointer(actual_type)), module.get());
                     }
 
+                    llvm::Value* absent_optional_pointer = nullptr;
+                    if (orig_arg->m_presence == ASR::presenceType::Optional &&
+                            ASRUtils::is_pointer(actual_type) &&
+                            ASRUtils::is_assumed_rank_array(actual_type) &&
+                            ASR::is_a<ASR::Var_t>(*x.m_args[i].m_value)) {
+                        ASR::Variable_t* arg = EXPR2VAR(x.m_args[i].m_value);
+                        llvm::Value* slot = llvm_symtab[get_hash((ASR::asr_t*)arg)];
+                        llvm::Value* actual_desc = llvm_utils->CreateLoad2(
+                            desc_type->getPointerTo(), slot);
+                        absent_optional_pointer = builder->CreateIsNull(actual_desc);
+                        tmp = actual_desc;
+                    }
+
                     // Ensure tmp is a pointer to the descriptor.
                     // For allocatable/pointer arrays the upstream Var handler
                     // may have loaded the struct VALUE (which is wrong on
@@ -28189,7 +28383,8 @@ public:
                             x.m_args[i].m_value));
                     if (LLVM::is_llvm_pointer(*actual_type)
                             && ASR::is_a<ASR::Var_t>(*x.m_args[i].m_value)
-                            && !already_has_assumed_rank_desc) {
+                            && !already_has_assumed_rank_desc
+                            && absent_optional_pointer == nullptr) {
                         ASR::Variable_t *arg = EXPR2VAR(x.m_args[i].m_value);
                         uint64_t h = get_hash((ASR::asr_t*)arg);
                         // The variable's alloca (ptr-to-ptr for
@@ -28220,6 +28415,20 @@ public:
                     if (tmp->getType()->isPointerTy()) {
                         tmp = builder->CreateBitCast(tmp,
                             desc_type->getPointerTo());
+                    }
+
+                    llvm::BasicBlock* absent_cfi_block = nullptr;
+                    llvm::BasicBlock* cfi_merge_block = nullptr;
+                    if (absent_optional_pointer) {
+                        llvm::Function* caller = builder->GetInsertBlock()->getParent();
+                        llvm::BasicBlock* cfi_convert_block =
+                            llvm::BasicBlock::Create(context, "cfi_present", caller);
+                        cfi_merge_block = llvm::BasicBlock::Create(
+                            context, "cfi_optional_merge", caller);
+                        absent_cfi_block = builder->GetInsertBlock();
+                        builder->CreateCondBr(absent_optional_pointer,
+                            cfi_merge_block, cfi_convert_block);
+                        builder->SetInsertPoint(cfi_convert_block);
                     }
 
                     // Convert internal descriptor to CFI layout (no offset
@@ -28291,9 +28500,16 @@ public:
                             : llvm_utils->get_string_length(str_type, str_desc);
                         elem_size_val = builder->CreateMul(str_len, elem_size_val);
                     }
-                    int n_dims = ASRUtils::extract_n_dims_from_ttype(actual_type);
                     bool is_type_star = ASR::is_a<ASR::StructType_t>(*elem_asr_type)
                         && ASR::down_cast<ASR::StructType_t>(elem_asr_type)->m_is_unlimited_polymorphic;
+                    if (is_type_star) {
+                        elem_size_val = llvm_utils->CreateLoad2(
+                            llvm::Type::getInt64Ty(context),
+                            llvm_utils->create_gep2(desc_type, tmp, 1));
+                    }
+                    bool assumed_rank_actual = ASRUtils::is_assumed_rank_array(actual_type);
+                    int n_dims = assumed_rank_actual ? 15 :
+                        ASRUtils::extract_n_dims_from_ttype(actual_type);
                     int8_t cfi_type_code = get_cfi_type_code(elem_asr_type);
                     int cfi_attr = 0;
                     if (actual_type && ASRUtils::is_allocatable(actual_type)) {
@@ -28301,10 +28517,17 @@ public:
                     } else if (actual_type && ASRUtils::is_pointer(actual_type)) {
                         cfi_attr = 1;
                     }
+                    if (absent_optional_pointer &&
+                            !ASRUtils::is_pointer(orig_arg->m_type) &&
+                            !ASRUtils::is_allocatable(orig_arg->m_type)) {
+                        // The transport pointer does not change the C dummy's
+                        // nonpointer descriptor attribute.
+                        cfi_attr = 0;
+                    }
                     llvm::Value* internal_desc_ptr = tmp;
                     tmp = arr_descr->internal_to_cfi(
                         desc_type, tmp, elem_llvm_type, n_dims, elem_size_val,
-                        cfi_type_code, cfi_attr);
+                        cfi_type_code, cfi_attr, assumed_rank_actual);
                     if (cfi_attr != 0 && !is_type_star &&
                             ASRUtils::is_array(actual_type) &&
                             orig_arg->m_intent != ASR::intentType::In) {
@@ -28329,7 +28552,8 @@ public:
                         // Write back to the original descriptor, not to the
                         // base_addr-replaced copy made for character arrays
                         pending_cfi_array_writebacks.push_back({orig_desc_ptr,
-                            tmp, desc_type, elem_llvm_type, n_dims, elem_size,
+                            tmp, absent_optional_pointer, desc_type, elem_llvm_type,
+                            n_dims, elem_size,
                             local_str_desc});
                     }
                     if (is_type_star) {
@@ -28340,7 +28564,8 @@ public:
                         llvm::Value* cfi_base_gep = llvm_utils->create_gep2(
                             cfi_struct, tmp, 0);
                         llvm::Value* box_i8 = llvm_utils->CreateLoad2(
-                            i8_ptr_type, cfi_base_gep);
+                            i8_ptr_type,
+                            llvm_utils->create_gep2(desc_type, internal_desc_ptr, 0));
                         llvm::Value* box_ptr = builder->CreateBitCast(
                             box_i8, elem_llvm_type->getPointerTo());
                         llvm::Value* data_ptr = unwrap_polymorphic_box_data(
@@ -28349,9 +28574,7 @@ public:
                         llvm::Value* src_type = llvm_utils->CreateLoad2(
                             llvm::Type::getInt8Ty(context),
                             llvm_utils->create_gep2(desc_type, internal_desc_ptr, 4));
-                        llvm::Value* src_elem_len = llvm_utils->CreateLoad2(
-                            llvm::Type::getInt64Ty(context),
-                            llvm_utils->create_gep2(desc_type, internal_desc_ptr, 1));
+                        llvm::Value* src_elem_len = elem_size_val;
 
                         // The box of a `type(*)` dummy already holds the
                         // address of the data. A `class(*)` box holds a
@@ -28385,7 +28608,15 @@ public:
                         final_data->addIncoming(raw_char_data, char_bb);
                         final_data->addIncoming(data_ptr, other_bb);
 
-                        builder->CreateStore(final_data, cfi_base_gep);
+                        llvm::Value* offset = arr_descr->get_offset(
+                            desc_type, internal_desc_ptr, true);
+                        llvm::Value* offset_bytes = builder->CreateMul(
+                            offset, src_elem_len);
+                        llvm::Value* first_data = builder->CreateGEP(
+                            llvm::Type::getInt8Ty(context), final_data, offset_bytes);
+                        builder->CreateStore(builder->CreateSelect(
+                            builder->CreateIsNull(final_data), final_data, first_data),
+                            cfi_base_gep);
 
                         builder->CreateStore(src_type,
                             llvm_utils->create_gep2(cfi_struct, tmp, 4));
@@ -28402,6 +28633,17 @@ public:
                         if (tmp->getType() != expected_type) {
                             tmp = builder->CreateBitCast(tmp, expected_type);
                         }
+                    }
+                    if (absent_optional_pointer) {
+                        llvm::BasicBlock* converted_block = builder->GetInsertBlock();
+                        builder->CreateBr(cfi_merge_block);
+                        builder->SetInsertPoint(cfi_merge_block);
+                        llvm::PHINode* cfi_arg = builder->CreatePHI(tmp->getType(), 2);
+                        cfi_arg->addIncoming(llvm::ConstantPointerNull::get(
+                            llvm::cast<llvm::PointerType>(tmp->getType())),
+                            absent_cfi_block);
+                        cfi_arg->addIncoming(tmp, converted_block);
+                        tmp = cfi_arg;
                     }
                 }
             }
@@ -29629,6 +29871,26 @@ public:
                     }
                 }
 
+                if (optional_check_mergeBB == nullptr && i < function->n_args &&
+                        ASRUtils::get_FunctionType(function)->m_abi == ASR::abiType::BindC &&
+                        ASRUtils::is_pointer(ASRUtils::expr_type(arr_cast->m_arg)) &&
+                        ASRUtils::expr_to_variable_or_null(function->m_args[i]) != nullptr &&
+                        ASRUtils::expr_to_variable_or_null(function->m_args[i])->m_presence ==
+                            ASR::presenceType::Optional) {
+                    // A disassociated pointer is an absent argument for an
+                    // optional bind(C) dummy, which receives NULL for it.
+                    int64_t ptr_loads_copy = ptr_loads;
+                    ptr_loads = 1 - !LLVM::is_llvm_pointer(*ASRUtils::expr_type(arr_cast->m_arg));
+                    this->visit_expr_wrapper(arr_cast->m_arg, true);
+                    ptr_loads = ptr_loads_copy;
+                    is_present_flag = arr_descr->get_is_allocated_flag(tmp, arr_cast->m_arg);
+                    llvm::Function *fn = builder->GetInsertBlock()->getParent();
+                    llvm::BasicBlock *present_checkBB = llvm::BasicBlock::Create(context, "optional_present", fn);
+                    optional_check_mergeBB = llvm::BasicBlock::Create(context, "optional_merge");
+                    builder->CreateCondBr(llvm_utils->to_i1(is_present_flag), present_checkBB, optional_check_mergeBB);
+                    builder->SetInsertPoint(present_checkBB);
+                }
+
                 if (arr_cast->m_old == ASR::DescriptorArray && (arr_cast->m_new == ASR::PointerArray || arr_cast->m_new == ASR::FixedSizeArray)) {
                     int64_t ptr_loads_copy = ptr_loads;
                     ptr_loads = 1 - !LLVM::is_llvm_pointer(*ASRUtils::expr_type(arr_cast->m_arg));
@@ -30148,26 +30410,34 @@ public:
 
     void apply_cfi_array_writebacks() {
         for (auto& wb : pending_cfi_array_writebacks) {
-            if (is_string_descriptor_type(wb.el_type)) {
-                if (wb.local_str_desc) {
-                    // Use a stack string_descriptor, so it is not leaked
-                    llvm::Value* base_addr_gep = llvm_utils->create_gep2(
-                        wb.internal_type, wb.internal_desc, 0);
-                    llvm::Value* str_desc = llvm_utils->CreateLoad2(
-                        wb.el_type->getPointerTo(), base_addr_gep);
-                    llvm::Value* is_null = builder->CreateICmpEQ(str_desc,
-                        llvm::ConstantPointerNull::get(
-                            llvm::cast<llvm::PointerType>(str_desc->getType())));
-                    llvm_utils->create_if_else(is_null, [&]() {
-                        builder->CreateStore(llvm_utils->CreateAlloca(
-                            wb.el_type, nullptr, "cfi_str_desc"), base_addr_gep);
-                    }, [](){});
+            auto write_back = [&]() {
+                if (is_string_descriptor_type(wb.el_type)) {
+                    if (wb.local_str_desc) {
+                        // Use a stack string_descriptor, so it is not leaked
+                        llvm::Value* base_addr_gep = llvm_utils->create_gep2(
+                            wb.internal_type, wb.internal_desc, 0);
+                        llvm::Value* str_desc = llvm_utils->CreateLoad2(
+                            wb.el_type->getPointerTo(), base_addr_gep);
+                        llvm::Value* is_null = builder->CreateICmpEQ(str_desc,
+                            llvm::ConstantPointerNull::get(
+                                llvm::cast<llvm::PointerType>(str_desc->getType())));
+                        llvm_utils->create_if_else(is_null, [&]() {
+                            builder->CreateStore(llvm_utils->CreateAlloca(
+                                wb.el_type, nullptr, "cfi_str_desc"), base_addr_gep);
+                        }, [](){});
+                    }
+                    arr_descr->cfi_to_internal_string(wb.internal_type, wb.el_type,
+                        wb.cfi_desc, wb.n_dims, wb.internal_desc);
+                } else {
+                    arr_descr->cfi_to_internal(wb.internal_type, wb.el_type,
+                        wb.cfi_desc, wb.n_dims, wb.elem_size, wb.internal_desc);
                 }
-                arr_descr->cfi_to_internal_string(wb.internal_type, wb.el_type,
-                    wb.cfi_desc, wb.n_dims, wb.internal_desc);
+            };
+            if (wb.is_absent) {
+                llvm_utils->create_if_else(builder->CreateNot(wb.is_absent),
+                    write_back, [](){});
             } else {
-                arr_descr->cfi_to_internal(wb.internal_type, wb.el_type,
-                    wb.cfi_desc, wb.n_dims, wb.elem_size, wb.internal_desc);
+                write_back();
             }
         }
         pending_cfi_array_writebacks.clear();

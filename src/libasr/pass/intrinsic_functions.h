@@ -299,6 +299,13 @@ static inline std::string real_c_func_name(const std::string &name,
         for (const char *f : quad_functions) {
             if (name == f) return "lf_" + name + "q";
         }
+        static const std::pair<const char *, const char *> renamed[] = {
+            {"gamma", "lf_tgammaq"}, {"log_gamma", "lf_lgammaq"},
+            {"bessel_j0", "lf_j0q"}, {"bessel_j1", "lf_j1q"},
+            {"bessel_y0", "lf_y0q"}, {"bessel_y1", "lf_y1q"}};
+        for (const auto &r : renamed) {
+            if (name == r.first) return r.second;
+        }
     }
     return "_lfortran_d" + name;
 }
@@ -329,15 +336,18 @@ static inline ASR::expr_t* instantiate_functions(Allocator &al,
     // scalar and pass it where the C function expects a value.
     ASR::ttype_t *value_arg_type = ASRUtils::type_get_past_pointer(arg_type);
     std::string c_func_name;
-    // The complex(16) routines of the runtime take and return their value
-    // through pointers: the ABI for a pair of binary128 numbers passed by
-    // value differs between platforms.
+    // The complex(10) and complex(16) routines of the runtime take and return
+    // their value through pointers: the ABI for a pair of x87 or binary128
+    // numbers passed by value differs between platforms.
     bool by_reference = false;
     switch (value_arg_type->type) {
         case ASR::ttypeType::Complex : {
             int complex_kind = ASRUtils::extract_kind_from_ttype_t(value_arg_type);
             if (complex_kind == 4) {
                 c_func_name = "_lfortran_c" + new_name;
+            } else if (complex_kind == 10) {
+                c_func_name = "_lfortran_c80_" + new_name;
+                by_reference = true;
             } else if (complex_kind == 16) {
                 c_func_name = "_lfortran_c128_" + new_name;
                 by_reference = true;
@@ -1134,7 +1144,7 @@ namespace math_func {                                                           
 create_math_bindc(BesselJ0, HostBessel::j0, HostBessel::j0l, 0, bessel_j0, lf_f128_j0)
 create_math_bindc(BesselJ1, HostBessel::j1, HostBessel::j1l, 0, bessel_j1, lf_f128_j1)
 create_math_bindc(BesselY0, HostBessel::y0, HostBessel::y0l, 0, bessel_y0, lf_f128_y0)
-create_math_bindc(BesselY1, HostBessel::y1, HostBessel::y1l, 0, bessel_y1, nullptr)
+create_math_bindc(BesselY1, HostBessel::y1, HostBessel::y1l, 0, bessel_y1, lf_f128_y1)
 create_math_bindc(Asind, asin, asinl, 1, asind, lf_f128_asind)
 create_math_bindc(Acosd, acos, acosl, 1, acosd, lf_f128_acosd)
 create_math_bindc(Atand, atan, atanl, 1, atand, lf_f128_atand)
@@ -1675,6 +1685,14 @@ namespace StorageSize {
             int64_t kind = ASRUtils::extract_kind_from_ttype_t(type);
             if (kind == 4) return make_ConstantWithType(make_IntegerConstant_t, 64, t1, loc);
             else if (kind == 8) return make_ConstantWithType(make_IntegerConstant_t, 128, t1, loc);
+            else if (kind == 10) {
+                // The size of the platform's storage of two real(10) parts.
+                int64_t bytes = ASRUtils::get_type_byte_size(type);
+                if (bytes > 0) {
+                    return make_ConstantWithType(make_IntegerConstant_t, bytes * 8, t1, loc);
+                }
+                return make_ConstantWithType(make_IntegerConstant_t, -1, t1, loc);
+            }
             else if (kind == 16) return make_ConstantWithType(make_IntegerConstant_t, 256, t1, loc);
             else return make_ConstantWithType(make_IntegerConstant_t, -1, t1, loc);
             
@@ -4099,6 +4117,38 @@ namespace Sqrt {
 
 }  // namespace Sqrt
 
+// Calls a binary128 runtime routine of lfortran_intrinsics.c that takes its
+// inputs by reference and writes `result` through its last argument.
+static inline void call_real16_runtime(Allocator &al, const Location &loc,
+        SymbolTable *fn_symtab, SetChar &dep, Vec<ASR::stmt_t*> &body,
+        ASRBuilder &b, const std::string &c_name,
+        const std::vector<ASR::expr_t*> &inputs, ASR::expr_t *result) {
+    SymbolTable *fn_symtab_1 = al.make_new<SymbolTable>(fn_symtab);
+    Vec<ASR::expr_t*> args_1;
+    args_1.reserve(al, inputs.size() + 1);
+    Vec<ASR::call_arg_t> call_args;
+    call_args.reserve(al, inputs.size() + 1);
+    for (size_t i = 0; i < inputs.size(); i++) {
+        args_1.push_back(al, b.Variable(fn_symtab_1, "a" + std::to_string(i),
+            ASRUtils::expr_type(inputs[i]), ASR::intentType::In, nullptr,
+            ASR::abiType::BindC, false));
+        ASR::call_arg_t call_arg; call_arg.loc = loc; call_arg.m_value = inputs[i];
+        call_args.push_back(al, call_arg);
+    }
+    args_1.push_back(al, b.Variable(fn_symtab_1, "r", ASRUtils::expr_type(result),
+        ASR::intentType::Out, nullptr, ASR::abiType::BindC, false));
+    ASR::call_arg_t result_arg; result_arg.loc = loc; result_arg.m_value = result;
+    call_args.push_back(al, result_arg);
+    SetChar dep_1; dep_1.reserve(al, 1);
+    Vec<ASR::stmt_t*> body_1; body_1.reserve(al, 1);
+    ASR::symbol_t *c_sym = make_Function_Without_ReturnVar_t(c_name, fn_symtab_1,
+        dep_1, args_1, body_1, ASR::abiType::BindC, ASR::deftypeType::Interface,
+        s2c(al, c_name));
+    fn_symtab->add_symbol(c_name, c_sym);
+    dep.push_back(al, s2c(al, c_name));
+    body.push_back(al, b.SubroutineCall(c_sym, call_args));
+}
+
 namespace Exponent {
 
     static ASR::expr_t* eval_Exponent(Allocator& al, const Location& loc,
@@ -4161,6 +4211,14 @@ namespace Exponent {
         fill_func_arg("x", arg_types[0]);
         auto result = declare(fn_name, return_type, ReturnVar);
         int32_t kind = extract_kind_from_ttype_t(arg_types[0]);
+        if (kind == 16) {
+            call_real16_runtime(al, loc, fn_symtab, dep, body, b,
+                "_lfortran_exponent_f128", {args[0]}, result);
+            ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
+                body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
+            scope->add_symbol(fn_name, f_sym);
+            return b.Call(f_sym, new_args, return_type, nullptr);
+        }
         /*
             if (x == 0.0) then
                 result = 0
@@ -4286,6 +4344,14 @@ namespace Fraction {
         declare_basic_variables("_lcompilers_fraction_" + type_to_str_python_expr(arg_types[0], new_args[0].m_value));
         fill_func_arg("x", arg_types[0]);
         auto result = declare(fn_name, return_type, ReturnVar);
+        if (ASRUtils::extract_kind_from_ttype_t(arg_types[0]) == 16) {
+            call_real16_runtime(al, loc, fn_symtab, dep, body, b,
+                "_lfortran_fraction_f128", {args[0]}, result);
+            ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
+                body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
+            scope->add_symbol(fn_name, f_sym);
+            return b.Call(f_sym, new_args, return_type, nullptr);
+        }
         /*
         * r = fraction(x, y)
         * r = x * radix(x)**(-exp(x))
@@ -4365,6 +4431,16 @@ namespace SetExponent {
         fill_func_arg("i", arg_types[1]);
         auto result = declare(fn_name, return_type, ReturnVar);
 
+        if (ASRUtils::extract_kind_from_ttype_t(arg_types[0]) == 16) {
+            ASR::expr_t *i64 = declare("i64", int64, Local);
+            body.push_back(al, b.Assignment(i64, b.i2i_t(args[1], int64)));
+            call_real16_runtime(al, loc, fn_symtab, dep, body, b,
+                "_lfortran_set_exponent_f128", {args[0], i64}, result);
+            ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
+                body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
+            scope->add_symbol(fn_name, f_sym);
+            return b.Call(f_sym, new_args, return_type, nullptr);
+        }
         /*
         * r = setexponent(x, I)
         * r = fraction(x) * radix(x)**(I)
@@ -5417,6 +5493,14 @@ namespace Nearest {
         fill_func_arg("x", arg_types[0]);
         fill_func_arg("s", arg_types[1]);
         auto result = declare(fn_name, arg_types[0], ReturnVar);
+        if (ASRUtils::extract_kind_from_ttype_t(arg_types[0]) == 16) {
+            call_real16_runtime(al, loc, fn_symtab, dep, body, b,
+                "_lfortran_nearest_f128", {args[0], args[1]}, result);
+            ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
+                body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
+            scope->add_symbol(fn_name, f_sym);
+            return b.Call(f_sym, new_args, return_type, nullptr);
+        }
         /*
         function nearest(x, s) result(result)
             real :: x, s
@@ -5543,6 +5627,14 @@ namespace Spacing {
         declare_basic_variables("_lcompilers_spacing_" + type_to_str_python_expr(arg_types[0], new_args[0].m_value));
         fill_func_arg("x", arg_types[0]);
         auto result = declare(fn_name, arg_types[0], ReturnVar);
+        if (ASRUtils::extract_kind_from_ttype_t(arg_types[0]) == 16) {
+            call_real16_runtime(al, loc, fn_symtab, dep, body, b,
+                "_lfortran_spacing_f128", {args[0]}, result);
+            ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
+                body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
+            scope->add_symbol(fn_name, f_sym);
+            return b.Call(f_sym, new_args, return_type, nullptr);
+        }
         /*
         function spacing(x) result(result)
             real :: x
@@ -5708,6 +5800,8 @@ namespace BesselJN {
         std::string c_func_name;
         if (ASRUtils::extract_kind_from_ttype_t(arg_types[1]) == 4) {
             c_func_name = "_lfortran_sbesseljn";
+        } else if (ASRUtils::extract_kind_from_ttype_t(arg_types[1]) == 16) {
+            c_func_name = "lf_jnq";
         } else {
             c_func_name = "_lfortran_dbesseljn";
         }
@@ -5742,7 +5836,13 @@ namespace BesselYN {
     static ASR::expr_t *eval_BesselYN(Allocator& al, const Location& loc,
             ASR::ttype_t* t1, Vec<ASR::expr_t*>& args, diag::Diagnostics& /*diag*/) {
         if (ASRUtils::extract_kind_from_ttype_t(t1) == 16) {
-            return nullptr;
+            lf_float128 x = ASRUtils::real_constant_get_r16(
+                ASR::down_cast<ASR::RealConstant_t>(args[1]));
+            int n = checked_integer_cast<int>(
+                ASR::down_cast<ASR::IntegerConstant_t>(args[0])->m_n);
+            // The recurrence has n steps; leave a very long one to run time.
+            if (n > 250000 || n < -250000) return nullptr;
+            return ASRUtils::make_RealConstant_r16(al, loc, lf_f128_yn(n, x), t1);
         }
         if (ASRUtils::extract_kind_from_ttype_t(t1) == 10) {
             // Kind 10 stores a pointer in m_r. Fold Yn in long double.
@@ -5763,6 +5863,8 @@ namespace BesselYN {
         std::string c_func_name;
         if (ASRUtils::extract_kind_from_ttype_t(arg_types[1]) == 4) {
             c_func_name = "_lfortran_sbesselyn";
+        } else if (ASRUtils::extract_kind_from_ttype_t(arg_types[1]) == 16) {
+            c_func_name = "lf_ynq";
         } else {
             c_func_name = "_lfortran_dbesselyn";
         }
@@ -6085,12 +6187,14 @@ namespace Cmplx {
                 !ASRUtils::is_array(expr_type(args[0])) && expr_value(args[0]) &&
                 ASR::is_a<ASR::ComplexConstant_t>(*expr_value(args[0]))) {
             ASR::ComplexConstant_t* cc = ASR::down_cast<ASR::ComplexConstant_t>(expr_value(args[0]));
-            if (ASRUtils::complex_constant_is_r16(cc)) {
+            // A conversion to complex(10) is left to run time.
+            if (ASRUtils::complex_constant_is_r16(cc) &&
+                    extract_kind_from_ttype_t(return_type) != 10) {
                 m_value = ASRUtils::fold_complex_cast(al, loc, cc,
                     ASR::cast_kindType::ComplexToComplex, return_type);
             }
         }
-        if (extract_kind_from_ttype_t(return_type) != 16 && all_args_evaluated(m_args)) {
+        if (!is_wide_float_kind(extract_kind_from_ttype_t(return_type)) && all_args_evaluated(m_args)) {
             Vec<ASR::expr_t*> args_values; args_values.reserve(al, 3);
             args_values.push_back(al, expr_value(m_args[0]));
             args_values.push_back(al, expr_value(m_args[1]));
@@ -6100,27 +6204,35 @@ namespace Cmplx {
                 return nullptr;
             }
         }
-        if (extract_kind_from_ttype_t(return_type) == 16 && !ASRUtils::is_array(return_type) &&
+        if (is_wide_float_kind(extract_kind_from_ttype_t(return_type)) && !ASRUtils::is_array(return_type) &&
                 !is_complex(*expr_type(args[0])) && !ASRUtils::is_array(expr_type(args[0])) &&
                 !ASRUtils::is_array(expr_type(m_args[1])) && all_args_evaluated(m_args)) {
-            ASR::ttype_t* real16 = ASRUtils::TYPE(ASR::make_Real_t(al, loc, 16));
-            auto to_real16 = [&](ASR::expr_t* a) -> ASR::expr_t* {
+            // A constant complex(16) value is a ComplexConstant of binary128
+            // parts; a constant complex(10) value is a constructor from two
+            // real(10) constants, as a ComplexConstant holds no x87 parts.
+            int part_kind = extract_kind_from_ttype_t(return_type);
+            ASR::ttype_t* part_type = ASRUtils::TYPE(ASR::make_Real_t(al, loc, part_kind));
+            auto to_part = [&](ASR::expr_t* a) -> ASR::expr_t* {
                 if (is_integer(*expr_type(a))) {
                     return EXPR(ASRUtils::make_Cast_t_value(al, loc, a,
-                        ASR::cast_kindType::IntegerToReal, real16));
-                } else if (is_real(*expr_type(a)) && extract_kind_from_ttype_t(expr_type(a)) == 16) {
+                        ASR::cast_kindType::IntegerToReal, part_type));
+                } else if (is_real(*expr_type(a)) && extract_kind_from_ttype_t(expr_type(a)) == part_kind) {
                     return a;
                 } else if (is_real(*expr_type(a))) {
                     return EXPR(ASRUtils::make_Cast_t_value(al, loc, a,
-                        ASR::cast_kindType::RealToReal, real16));
+                        ASR::cast_kindType::RealToReal, part_type));
                 }
                 return nullptr;
             };
-            ASR::expr_t* re = to_real16(m_args[0]);
-            ASR::expr_t* im = to_real16(m_args[1]);
+            ASR::expr_t* re = to_part(m_args[0]);
+            ASR::expr_t* im = to_part(m_args[1]);
             ASR::expr_t* re_value = re ? expr_value(re) : nullptr;
             ASR::expr_t* im_value = im ? expr_value(im) : nullptr;
-            if (re_value && im_value && ASR::is_a<ASR::RealConstant_t>(*re_value) &&
+            if (part_kind == 10) {
+                if (re && im && is_value_constant(re_value) && is_value_constant(im_value)) {
+                    m_value = EXPR(ASR::make_ComplexConstructor_t(al, loc, re, im, return_type, nullptr));
+                }
+            } else if (re_value && im_value && ASR::is_a<ASR::RealConstant_t>(*re_value) &&
                     ASR::is_a<ASR::RealConstant_t>(*im_value)) {
                 m_value = ASRUtils::make_ComplexConstant_r16(al, loc,
                     ASRUtils::real_constant_get_r16(ASR::down_cast<ASR::RealConstant_t>(re_value)),
@@ -6147,17 +6259,29 @@ namespace Cmplx {
             result = a
         end function
         */
+        // A real part of another kind than the result is converted explicitly
+        // when kind=10 is involved, as the backend does not infer conversions.
+        ASR::ttype_t* part_type = ASRUtils::TYPE(ASR::make_Real_t(al, loc,
+            ASRUtils::extract_kind_from_ttype_t(return_type)));
+        auto to_part = [&](ASR::expr_t* a, ASR::ttype_t* a_type) -> ASR::expr_t* {
+            int a_kind = ASRUtils::extract_kind_from_ttype_t(a_type);
+            int r_kind = ASRUtils::extract_kind_from_ttype_t(return_type);
+            if (a_kind != r_kind && (a_kind == 10 || r_kind == 10)) {
+                return b.r2r_t(a, part_type);
+            }
+            return a;
+        };
         if (is_integer(*arg_types[0])) {
             if (is_integer(*arg_types[1])) {
                 body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, b.i2r_t(args[0], real32),  b.i2r_t(args[1], real32), return_type, nullptr))));
             } else if (is_real(*arg_types[1])) {
-                body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, b.i2r_t(args[0], real32),  args[1], return_type, nullptr))));
+                body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, b.i2r_t(args[0], real32),  to_part(args[1], arg_types[1]), return_type, nullptr))));
             }
         } else if (is_real(*arg_types[0])) {
             if (is_integer(*arg_types[1])) {
-                body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, args[0], b.i2r_t(args[1], real32), return_type, nullptr))));
+                body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, to_part(args[0], arg_types[0]), b.i2r_t(args[1], real32), return_type, nullptr))));
             } else if (is_real(*arg_types[0])) {
-                body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, args[0],  args[1], return_type, nullptr))));
+                body.push_back(al, b.Assignment(result, EXPR(ASR::make_ComplexConstructor_t(al, loc, to_part(args[0], arg_types[0]),  to_part(args[1], arg_types[1]), return_type, nullptr))));
             }
         } else if (is_complex(*arg_types[0])) {
             if (ASRUtils::check_equal_type(ASRUtils::expr_type(args[0]), return_type, args[0], nullptr)) {
@@ -7877,6 +8001,14 @@ namespace Rrspacing {
         declare_basic_variables("_lcompilers_optimization_rrspacing_" + type_to_str_python_expr(arg_types[0], new_args[0].m_value));
         fill_func_arg("x", arg_types[0]);
         auto result = declare(fn_name, return_type, ReturnVar);
+        if (ASRUtils::extract_kind_from_ttype_t(arg_types[0]) == 16) {
+            call_real16_runtime(al, loc, fn_symtab, dep, body, b,
+                "_lfortran_rrspacing_f128", {args[0]}, result);
+            ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
+                body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
+            scope->add_symbol(fn_name, f_sym);
+            return b.Call(f_sym, new_args, return_type, nullptr);
+        }
         /*
         * r = rrspacing(X)
         * r = abs(fraction(X)) * (radix(X)**digits(X))
@@ -8590,11 +8722,21 @@ namespace ErfcScaled {
         /*
         * r = erfc_scaled(x)
         * r = exp(x**2) * erfc(x)
+        * For real(16) the runtime computes it directly, since exp(x**2)
+        * overflows and erfc(x) underflows long before the product does.
         */
 
-        body.push_back(al, b.Assignment(result, b.Mul(
-            b.CallIntrinsic(scope, {arg_types[0]}, {b.Pow(args[0], b.f_t(2, arg_types[0]))}, arg_types[0], 0, Exp::instantiate_Exp),
-            b.CallIntrinsic(scope, {arg_types[0]}, {args[0]}, arg_types[0], 0, Erfc::instantiate_Erfc))));
+        if (ASRUtils::extract_kind_from_ttype_t(arg_types[0]) == 16) {
+            std::string c_func_name = "lf_erfc_scaledq";
+            ASR::symbol_t *s = b.create_c_func(c_func_name, fn_symtab, return_type, 1, arg_types);
+            fn_symtab->add_symbol(c_func_name, s);
+            dep.push_back(al, s2c(al, c_func_name));
+            body.push_back(al, b.Assignment(result, b.Call(s, args, return_type)));
+        } else {
+            body.push_back(al, b.Assignment(result, b.Mul(
+                b.CallIntrinsic(scope, {arg_types[0]}, {b.Pow(args[0], b.f_t(2, arg_types[0]))}, arg_types[0], 0, Exp::instantiate_Exp),
+                b.CallIntrinsic(scope, {arg_types[0]}, {args[0]}, arg_types[0], 0, Erfc::instantiate_Erfc))));
+        }
 
         ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args, body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
         scope->add_symbol(fn_name, f_sym);
