@@ -662,6 +662,8 @@ RUN(NAME expr_18 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc wasm c fortran)
 RUN(NAME expr_19 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc wasm c)
 RUN(NAME expr_20 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc wasm c fortran)
 RUN(NAME expr_21 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc NO_FAST_MATH)
+RUN(NAME real_pow_negative_integer_01 LABELS llvm llvm_wasm_emcc) # x**(-n) where x**n overflows; GFortran gives 0 at -O0
+RUN(NAME expr_22 LABELS gfortran llvm llvm_wasm_emcc) # integer powers with negative exponents
 
 RUN(NAME data_01 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc c fortran)
 RUN(NAME data_02 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc c fortran)
@@ -6164,6 +6166,7 @@ RUN(NAME lbound_05 LABELS gfortran llvm)
 RUN(NAME vector_subscript_01 LABELS gfortran llvm) # lbound, ubound and size of x(idx) when idx does not start at 1 (#16926)
 RUN(NAME vector_subscript_03 LABELS gfortran llvm) # element of a nested vector subscript, A(B(V)) and A(B(V(i:j)))
 RUN(NAME vector_subscript_04 LABELS gfortran llvm llvm_wasm_emcc EXTRA_ARGS --realloc-lhs-arrays) # allocatable x(v) = x(v) + y is not reallocated
+RUN(NAME vector_subscript_05 LABELS gfortran llvm llvm_wasm_emcc) # lbound and ubound of a column section used as a vector subscript
 RUN(NAME module_function_with_nopass LABELS gfortran llvm llvm_wasm llvm_wasm_emcc)
 RUN(NAME module_function_without_nopass LABELS gfortran llvm llvm_wasm llvm_wasm_emcc)
 
@@ -6683,6 +6686,7 @@ RUN(NAME intent_out_array_default_init_03 LABELS gfortran llvm)
 # gfortran 13.3 does not apply these defaults to a scalar intent(out) dummy
 # of a finalizable type (it keeps the caller's values), so llvm only
 RUN(NAME intent_out_array_default_init_04 LABELS llvm)
+RUN(NAME intent_out_array_default_init_05 LABELS gfortran llvm llvm_wasm_emcc) # fixed-size component array of default-initialized elements
 RUN(NAME array_shape_func_call LABELS gfortran llvm llvm_wasm llvm_wasm_emcc)
 RUN(NAME array_neg_extent_01 LABELS gfortran llvm)
 
@@ -7927,6 +7931,7 @@ RUN(NAME complex128_io_array_01 LABELS gfortran llvm)
 RUN(NAME complex128_module_01 LABELS gfortran llvm EXTRAFILES complex128_module_01_mod.f90)
 RUN(NAME complex128_parameter_array_01 LABELS gfortran llvm)
 RUN(NAME complex128_bindc_01 LABELS gfortran llvm)
+RUN(NAME bindc_complex_value_01 LABELS gfortran llvm llvm_wasm_emcc) # complex VALUE arguments of bind(c) procedures
 # real(10) tests run only where the runtime is known to read the kind 10
 # storage type of the generated code (x86-64 Linux, Apple arm64); on Windows and
 # aarch64 Linux the two disagree: https://github.com/lfortran/lfortran/issues/13935

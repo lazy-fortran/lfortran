@@ -9445,6 +9445,17 @@ public:
                         && !ASRUtils::is_class_type(ASRUtils::type_get_past_array(symbol_type))) {
                         allocate_array_members_of_struct_arrays(v->m_type_declaration, ptr_member, symbol_type);
                     }
+                } else if (is_intent_out && apply_init && ASR::is_a<ASR::Variable_t>(*sym) &&
+                        ASRUtils::is_fixed_size_array(symbol_type) &&
+                        ASR::is_a<ASR::StructType_t>(*ASRUtils::type_get_past_array(symbol_type)) &&
+                        !ASRUtils::is_class_type(ASRUtils::type_get_past_array(symbol_type))) {
+                    // An intent(out) dummy, and a function result returned
+                    // through one, is default initialized on entry (F2018
+                    // 8.5.10), the elements of a fixed-size component array
+                    // too; they have no descriptor that could be returned.
+                    allocate_array_members_of_struct_arrays(
+                        ASR::down_cast<ASR::Variable_t>(sym)->m_type_declaration,
+                        ptr_member, symbol_type);
                 } else if (ASR::is_a<ASR::StructType_t>(*symbol_type) && !ASRUtils::is_class_type(symbol_type)) {
                     ASR::Struct_t* struct_sym = ASR::down_cast<ASR::Struct_t>(ASRUtils::symbol_get_past_external(
                         ASR::down_cast<ASR::Variable_t>(sym)->m_type_declaration));
@@ -11607,7 +11618,12 @@ public:
                         ASR::is_a<ASR::Complex_t>(*arg->m_type)) {
                         llvm::Type* internal_type = llvm_utils->getComplexType(
                             ASRUtils::extract_kind_from_ttype_t(arg->m_type));
-                        if (llvm_arg.getType() != internal_type) {
+                        if (llvm_arg.getType()->isPointerTy()) {
+                            // The C ABI passes it in memory (WebAssembly;
+                            // complex(8) on Windows): the argument points to
+                            // the value.
+                            llvm_sym = llvm_utils->CreateLoad2(internal_type, &llvm_arg);
+                        } else if (llvm_arg.getType() != internal_type) {
                             llvm::Value* arg_alloca = builder->CreateAlloca(
                                 llvm_arg.getType(), nullptr);
                             builder->CreateStore(&llvm_arg, arg_alloca);
@@ -19835,6 +19851,42 @@ public:
                     llvm::Function *fn_pow = LLVM::get_or_declare_function(
                         *module, func_name, base_type, { base_type, exponent_type });
                     tmp = builder->CreateCall(fn_pow, {left_val, right_val});
+                    if (func_name.rfind("llvm.powi.f", 0) == 0) {
+                        // llvm.powi computes x**(-n) as 1/x**n, which is 0
+                        // or infinite where x**(-n) is a finite subnormal or
+                        // normal number, as 2.0**(-1074); pow is exact there.
+                        llvm::Value* y = tmp;
+                        llvm::BasicBlock* start = builder->GetInsertBlock();
+                        llvm::Function* fn = start->getParent();
+                        llvm::BasicBlock* by_pow = llvm::BasicBlock::Create(context,
+                            "pow_negative_exponent", fn);
+                        llvm::BasicBlock* done = llvm::BasicBlock::Create(context,
+                            "pow_done", fn);
+                        llvm::Value* zero = llvm::ConstantFP::get(base_type, 0.0);
+                        llvm::Value* inf = llvm::ConstantFP::getInfinity(base_type);
+                        llvm::Value* abs_y = builder->CreateSelect(
+                            builder->CreateFCmpOLT(y, zero), builder->CreateFNeg(y), y);
+                        llvm::Value* out_of_range = builder->CreateOr(
+                            builder->CreateFCmpOEQ(y, zero), builder->CreateFCmpOEQ(abs_y, inf));
+                        llvm::Value* negative = builder->CreateICmpSLT(right_val,
+                            llvm::ConstantInt::get(right_val->getType(), 0));
+                        builder->CreateCondBr(builder->CreateAnd(negative, out_of_range),
+                            by_pow, done);
+                        builder->SetInsertPoint(by_pow);
+                        std::string pow_name = func_name.find("f80") != std::string::npos
+                            ? "llvm.pow.f80" : (return_kind == 4 ? "llvm.pow.f32" : "llvm.pow.f64");
+                        llvm::Function* fn_fpow = LLVM::get_or_declare_function(
+                            *module, pow_name, base_type, { base_type, base_type });
+                        llvm::Value* y_pow = builder->CreateCall(fn_fpow,
+                            {left_val, builder->CreateSIToFP(right_val, base_type)});
+                        llvm::BasicBlock* by_pow_end = builder->GetInsertBlock();
+                        builder->CreateBr(done);
+                        builder->SetInsertPoint(done);
+                        llvm::PHINode* phi = builder->CreatePHI(base_type, 2);
+                        phi->addIncoming(y, start);
+                        phi->addIncoming(y_pow, by_pow_end);
+                        tmp = phi;
+                    }
                 }
                 break;
             };
@@ -31258,6 +31310,21 @@ public:
     void visit_ArrayBound(const ASR::ArrayBound_t& x) {
         if (x.m_value) {
             this->visit_expr(*x.m_value);
+            return;
+        }
+        if (ASR::is_a<ASR::ArraySection_t>(*x.m_v) && x.m_dim &&
+                ASRUtils::is_value_constant(x.m_dim)) {
+            // A section has lower bounds 1 and its extents as upper bounds
+            // (F2018 16.9.109, 16.9.197); its value need not be a descriptor.
+            ASR::expr_t* bound = nullptr;
+            if (x.m_bound == ASR::arrayboundType::LBound) {
+                bound = ASRUtils::EXPR(ASR::make_IntegerConstant_t(al,
+                    x.base.base.loc, 1, x.m_type));
+            } else {
+                bound = ASRUtils::EXPR(ASRUtils::make_ArraySize_t_util(al,
+                    x.base.base.loc, x.m_v, x.m_dim, x.m_type, nullptr, true));
+            }
+            this->visit_expr_wrapper(bound, true);
             return;
         }
         ASR::expr_t* array_value = ASRUtils::expr_value(x.m_v);
