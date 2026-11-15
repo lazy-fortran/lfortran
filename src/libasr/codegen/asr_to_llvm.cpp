@@ -13015,11 +13015,20 @@ public:
             ASR::Variable_t* cptr_var = ASRUtils::EXPR2VAR(cptr);
             reduce_loads = LLVM::is_cptr_dummy_held_by_value(*cptr_var);
         }
+        // A c_ptr with the POINTER attribute: the address is the c_ptr it
+        // points to, one load further than the pointer itself.
+        bool cptr_is_pointer = ASR::is_a<ASR::Var_t>(*cptr)
+            && ASRUtils::is_pointer(ASRUtils::expr_type(cptr));
+        auto load_pointer_target = [&](llvm::Value* v) {
+            if (!cptr_is_pointer) return v;
+            return llvm_utils->CreateLoad2(llvm_utils->i8_ptr,
+                builder->CreateBitCast(v, llvm_utils->i8_ptr->getPointerTo()));
+        };
         if( ASRUtils::is_array(ASRUtils::expr_type(fptr)) ) {
             int64_t ptr_loads_copy = ptr_loads;
             ptr_loads = 1 - reduce_loads;
             this->visit_expr(*cptr);
-            llvm::Value* llvm_cptr = tmp;
+            llvm::Value* llvm_cptr = load_pointer_target(tmp);
             if (ASR::is_a<ASR::StructInstanceMember_t>(*cptr)) {
                 // `type(c_ptr)` requires an extra load here
                 // TODO: be more explicit about ptr_loads: https://github.com/lfortran/lfortran/issues/4245
@@ -13142,7 +13151,7 @@ public:
             int64_t ptr_loads_copy = ptr_loads;
             ptr_loads = 1 - reduce_loads;
             this->visit_expr(*cptr);
-            llvm::Value* llvm_cptr = tmp;
+            llvm::Value* llvm_cptr = load_pointer_target(tmp);
             if (ASR::is_a<ASR::StructInstanceMember_t>(*cptr)) {
                 // Load the actual pointer value for type(c_ptr) members
                 llvm::Type* cptr_llvm_type = llvm::Type::getInt8Ty(context)->getPointerTo(); // void*

@@ -2586,6 +2586,7 @@ RUN(NAME bindc_54 LABELS gfortran llvm)
 RUN(NAME bindc_55 LABELS gfortran llvm)
 RUN(NAME bindc_56 LABELS gfortran llvm)
 RUN(NAME c_associated_pointer_01 LABELS gfortran llvm llvm_wasm_emcc) # c_associated of a c_ptr with the POINTER attribute
+RUN(NAME c_f_pointer_of_pointer_01 LABELS gfortran llvm llvm_wasm_emcc) # c_f_pointer of a c_ptr with the POINTER attribute
 RUN(NAME bindc_iso_fb_01 LABELS gfortran llvm flang EXTRAFILES bindc_iso_fb_01c.c)
 RUN(NAME bindc_iso_fb_02 LABELS gfortran llvm flang EXTRAFILES bindc_iso_fb_02c.c)
 RUN(NAME bindc_iso_fb_03 LABELS gfortran llvm flang EXTRAFILES bindc_iso_fb_03c.c)
