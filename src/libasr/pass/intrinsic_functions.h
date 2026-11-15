@@ -1784,7 +1784,34 @@ namespace Scale {
        //TODO: Radix for most of the device is 2, so we can use the b.i2r_t(2, real32) instead of args[1]. Fix (find a way to get the radix of the device and use it here)
         // The exponentiation must be done in floating point: `i` may be negative,
         // and integer 2**i truncates to 0 for any i < 0.
-        body.push_back(al, b.Assignment(result, b.Mul(args[0], b.Pow(b.f_t(2.0, return_type), b.i2r_t(args[1], return_type)))));
+        int kind = ASRUtils::extract_kind_from_ttype_t(return_type);
+        if (kind == 4 || kind == 8) {
+            // x*2**i overflows or underflows in 2**i where the result is
+            // representable, as scale(0.75d0, 1024); ldexp is exact there.
+            std::string c_name = kind == 4 ? "ldexpf" : "ldexp";
+            SymbolTable* fn_symtab_1 = al.make_new<SymbolTable>(fn_symtab);
+            Vec<ASR::expr_t*> args_1; args_1.reserve(al, 2);
+            args_1.push_back(al, b.Variable(fn_symtab_1, "x", arg_types[0],
+                ASR::intentType::In, nullptr, ASR::abiType::BindC, true));
+            args_1.push_back(al, b.Variable(fn_symtab_1, "e", int32,
+                ASR::intentType::In, nullptr, ASR::abiType::BindC, true));
+            ASR::expr_t* return_var_1 = b.Variable(fn_symtab_1, c_name, return_type,
+                ASRUtils::intent_return_var, nullptr, ASR::abiType::BindC, false);
+            SetChar dep_1; dep_1.reserve(al, 1);
+            Vec<ASR::stmt_t*> body_1; body_1.reserve(al, 1);
+            ASR::symbol_t* c_sym = make_ASR_Function_t(c_name, fn_symtab_1, dep_1,
+                args_1, body_1, return_var_1, ASR::abiType::BindC,
+                ASR::deftypeType::Interface, s2c(al, c_name));
+            fn_symtab->add_symbol(c_name, c_sym);
+            dep.push_back(al, s2c(al, c_name));
+            Vec<ASR::expr_t*> c_args; c_args.reserve(al, 2);
+            c_args.push_back(al, args[0]);
+            c_args.push_back(al, ASRUtils::extract_kind_from_ttype_t(arg_types[1]) == 4
+                ? args[1] : b.i2i_t(args[1], int32));
+            body.push_back(al, b.Assignment(result, b.Call(c_sym, c_args, return_type)));
+        } else {
+            body.push_back(al, b.Assignment(result, b.Mul(args[0], b.Pow(b.f_t(2.0, return_type), b.i2r_t(args[1], return_type)))));
+        }
         ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args, body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
         scope->add_symbol(fn_name, f_sym);
         return b.Call(f_sym, new_args, return_type, nullptr);
@@ -5550,8 +5577,11 @@ namespace Nearest {
 
         body.push_back(al, b.If(b.Eq(args[0], b.f_t(0.0, arg_types[0])), {
             b.Assignment(ix, b.i_t(1, int_type)),
+            // the smallest negative subnormal: the sign bit and 1; the
+            // integer -1 would be all bits set, a NaN
             b.If(b.Lt(args[1], b.f_t(0.0, arg_types[1])), {
-                b.Assignment(ix, b.i_t(-1, int_type))
+                b.Assignment(ix, b.i_t(kind == 4 ? (int64_t) INT32_MIN + 1
+                    : INT64_MIN + 1, int_type))
             }, {}),
             b.Assignment(result, EXPR(ASR::make_BitCast_t(al, loc, ix, zero, nullptr, arg_types[0], nullptr))),
             b.Return(),
@@ -5642,8 +5672,31 @@ namespace Spacing {
             result = nearest(x, 1.0) - x
         end function
         */
-        ASR::expr_t* nearest_expr = Nearest::NEAREST(b, args[0], b.f_t(1, arg_types[0]), scope);
-        body.push_back(al, b.Assignment(result, b.Sub(nearest_expr, args[0])));
+        // The spacing at |x| (F2018 16.9.180): above |x|, except at huge,
+        // and not below tiny, which is also the spacing of 0.
+        int kind = ASRUtils::extract_kind_from_ttype_t(arg_types[0]);
+        ASR::expr_t* ax = declare("ax", arg_types[0], Local);
+        body.push_back(al, b.If(b.Lt(args[0], b.f_t(0.0, arg_types[0])), {
+            b.Assignment(ax, b.Mul(b.f_t(-1.0, arg_types[0]), args[0]))
+        }, {
+            b.Assignment(ax, args[0])
+        }));
+        ASR::expr_t* up = Nearest::NEAREST(b, ax, b.f_t(1, arg_types[0]), scope);
+        ASR::expr_t* down = Nearest::NEAREST(b, ax, b.f_t(-1, arg_types[0]), scope);
+        double huge_value = kind == 4 ? std::numeric_limits<float>::max()
+            : std::numeric_limits<double>::max();
+        double tiny_value = kind == 4 ? std::numeric_limits<float>::min()
+            : std::numeric_limits<double>::min();
+        body.push_back(al, b.If(b.Eq(ax, b.f_t(huge_value, arg_types[0])), {
+            b.Assignment(result, b.Sub(ax, down))
+        }, {
+            b.Assignment(result, b.Sub(up, ax))
+        }));
+        if (kind == 4 || kind == 8) {
+            body.push_back(al, b.If(b.Lt(result, b.f_t(tiny_value, arg_types[0])), {
+                b.Assignment(result, b.f_t(tiny_value, arg_types[0]))
+            }, {}));
+        }
         ASR::symbol_t *f_sym = make_ASR_Function_t(fn_name, fn_symtab, dep, args,
             body, result, ASR::abiType::Source, ASR::deftypeType::Implementation, nullptr);
         scope->add_symbol(fn_name, f_sym);
