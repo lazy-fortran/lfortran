@@ -43,6 +43,16 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
 | lfortran/lfortran#16376 | parse bare I/O statements in an interactive cell |
 | lfortran/lfortran#16377 | load libraries and module directories from a cell |
 | lfortran/lfortran#17762 | built-in LLD skips GCC directories of other systems (MinGW next to Linux GCC) |
+| lfortran/lfortran#17830 | an implicit-interface external procedure is declared by its first call (WebAssembly links it) |
+| lfortran/lfortran#17831 | the length of a STOP message is passed to printf as int |
+| lfortran/lfortran#17832 | `_lfortran_random_seed` is declared with the runtime's signature |
+| lfortran/lfortran#17839 | size of a defined operation used for a function result shape |
+| lfortran/lfortran#17847 | a vector-subscripted target is not reallocated on assignment |
+| lfortran/lfortran#17851 | bounds of an array section in the LLVM backend |
+| lfortran/lfortran#17852 | default initialization of component arrays of an intent(out) dummy |
+| lfortran/lfortran#17853 | real power with a negative integer exponent in its full range |
+| lfortran/lfortran#17854 | complex VALUE argument of bind(c) passed in memory (WebAssembly) |
+| lfortran/lfortran#17855 | integer power with a negative exponent for bases 1 and -1 |
 
 Fixes in `main` that have no upstream pull request yet: static storage for
 main program variables (bf4b95bcc1), the names a cell defines, uses and
