@@ -21126,6 +21126,14 @@ public:
                     x.m_source, source_arr_type, module.get());
                 llvm::Type* llvm_source_elem_type = llvm_utils->get_type_from_ttype_t_util(
                     x.m_source, ASRUtils::extract_type(source_arr_type), module.get());
+                // An allocatable or pointer array is stored as a pointer to
+                // its descriptor; without loads (a character MOLD makes the
+                // assignment visit with ptr_loads 0) that is what came back.
+                if (p_load == 0 && ASRUtils::is_allocatable_or_pointer(
+                        ASRUtils::expr_type(x.m_source))) {
+                    source = llvm_utils->CreateLoad2(
+                        llvm_source_arr_type->getPointerTo(), source);
+                }
                 llvm::Value* data_ptr_ptr = arr_descr->get_pointer_to_data(
                     x.m_source, ASRUtils::expr_type(x.m_source), source, module.get());
                 source_ptr = llvm_utils->CreateLoad2(
