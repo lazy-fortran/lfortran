@@ -5413,6 +5413,15 @@ public:
                 llvm::AllocaInst* alloc = llvm_utils->CreateAlloca(*builder, val->getType());
                 builder->CreateStore(val, alloc);
                 array = alloc;
+            } else if (ASR::is_a<ASR::ArrayConstant_t>(*x.m_v) &&
+                    ASRUtils::extract_physical_type(x_mv_type) ==
+                        ASR::array_physical_typeType::FixedSizeArray) {
+                // An array constant yields a pointer to its first element; a
+                // fixed-size array is indexed through a pointer to the whole
+                // array (a named constant indexed by a variable after its
+                // value was substituted, say).
+                array = builder->CreateBitCast(array, llvm_utils->get_type_from_ttype_t_util(
+                    x.m_v, x_mv_type, module.get())->getPointerTo());
             }
         }
 
