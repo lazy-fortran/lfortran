@@ -63,8 +63,10 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
 
 Fixes in `main` that have no upstream pull request yet: static storage for
 main program variables (bf4b95bcc1), the names a cell defines, uses and
-assigns (df3bf93103), and LSP union pointers when copying arrays and tuples
-(eeb73076d5).
+assigns (df3bf93103), LSP union pointers when copying arrays and tuples
+(eeb73076d5), `transfer` of an allocatable array to a character mold
+(a95f935133), and indexing a fixed-size array constant by a variable
+(18596e2ab7).
 
 ## Style
 
