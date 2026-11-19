@@ -3406,11 +3406,30 @@ llvm::Value* LLVMUtils::handle_global_nonallocatable_stringArray(
             }
             sequence.resize(total_len, ' '); 
 
-            llvm::ArrayType *char_array_type = llvm::ArrayType::get(llvm::Type::getInt8Ty(context), total_len);
+            // A character of kind 2 or 4 takes that many bytes.
+            int kind = checked_integer_cast<int>(elem_string->m_kind);
+            std::vector<uint8_t> wide;
+            if (kind > 1) {
+                wide.reserve(total_len * kind);
+                for (int64_t i = 0; i < num_elements; i++) {
+                    std::vector<uint8_t> elem = LCompilers::utf8_to_unicode_bytes(
+                        sequence.substr(i * elem_len, elem_len), kind);
+                    size_t n_chars = std::min<size_t>(elem.size() / kind, elem_len);
+                    elem.resize(elem_len * kind, 0x00);
+                    for (int64_t c = n_chars; c < elem_len; c++) {
+                        elem[c * kind] = 0x20;
+                    }
+                    wide.insert(wide.end(), elem.begin(), elem.end());
+                }
+            }
+
+            llvm::ArrayType *char_array_type = llvm::ArrayType::get(
+                llvm::Type::getInt8Ty(context), kind > 1 ? total_len * kind : total_len);
             // A common symbol must be zero initialized
             llvm::Constant *const_data_as_array =
                 data_linkage == llvm::GlobalValue::CommonLinkage
                     ? llvm::ConstantAggregateZero::get(char_array_type)
+                    : kind > 1 ? llvm::ConstantDataArray::get(context, wide)
                     : llvm::ConstantDataArray::getString(context, sequence, false);
 
             llvm::GlobalVariable *global_string_as_array = new llvm::GlobalVariable(

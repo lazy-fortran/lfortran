@@ -5702,6 +5702,7 @@ RUN(NAME save_29 LABELS gfortran llvm)
 RUN(NAME save_30 LABELS gfortran llvm)
 RUN(NAME save_31 LABELS gfortran llvm)
 RUN(NAME save_32 LABELS llvm llvm_wasm_emcc NO_DETECT_LEAKS)
+RUN(NAME save_33 LABELS gfortran llvm) # saved arrays of characters of kind 4
 
 
 RUN(NAME entry_01 LABELS gfortran llvm llvm_wasm llvm_wasm_emcc fortran)
