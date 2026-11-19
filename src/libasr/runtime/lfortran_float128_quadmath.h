@@ -88,6 +88,9 @@ static inline void lf_f128_to_str(char *buf, lf_float128 v) {
 lf_float128 lf_f128_from_double(double d);
 lf_float128 lf_f128_from_int64(int64_t i);
 double       lf_f128_to_double(lf_float128 v);
+/* Host long double (kind 10): exact widening, correctly rounded narrowing */
+lf_float128 lf_f128_from_long_double(long double v);
+long double  lf_f128_to_long_double(lf_float128 v);
 
 /* ── Basic arithmetic (kind-aware compile-time folding) ──────────────────── */
 lf_float128 lf_f128_add(lf_float128 a, lf_float128 b);
@@ -152,6 +155,16 @@ lf_float128 lf_f128_tand   (lf_float128 a);
 lf_float128 lf_f128_asind  (lf_float128 a);
 lf_float128 lf_f128_acosd  (lf_float128 a);
 lf_float128 lf_f128_atand  (lf_float128 a);
+lf_float128 lf_f128_atan2d (lf_float128 y, lf_float128 x);
+/* atan2(y, x)/pi (Fortran 2023 atan2pi) */
+lf_float128 lf_f128_atan2pi(lf_float128 y, lf_float128 x);
+/* Trigonometric functions in half revolutions (Fortran 2023 sinpi, ...) */
+lf_float128 lf_f128_sinpi  (lf_float128 a);
+lf_float128 lf_f128_cospi  (lf_float128 a);
+lf_float128 lf_f128_tanpi  (lf_float128 a);
+lf_float128 lf_f128_asinpi (lf_float128 a);
+lf_float128 lf_f128_acospi (lf_float128 a);
+lf_float128 lf_f128_atanpi (lf_float128 a);
 
 #ifdef __cplusplus
 }

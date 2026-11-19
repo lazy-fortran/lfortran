@@ -113,6 +113,7 @@ set(SRC
     pass/gpu_offload_stop.cpp
     pass/gpu_offload_component_fit.cpp
     pass/gpu_offload_designator.cpp
+    pass/gpu_offload_array_reduction.cpp
     pass/gpu_offload_preflight.cpp
     pass/gpu_offload_rewrite.cpp
     pass/gpu_offload_collect.cpp
@@ -129,6 +130,7 @@ set(SRC
     pass/gpu_launch_sync.cpp
     pass/gpu_sequential_unroll.cpp
     pass/gpu_residue_unroll.cpp
+    pass/gpu_dp4a.cpp
     pass/gpu_integer_powers.cpp
     pass/gpu_device_guard_fold.cpp
     pass/gpu_affine.cpp

@@ -155,7 +155,8 @@ it never broadcast), it assigns no private array (a lane-private copy the
 others would miss) and every private scalar it assigns is an integer, a
 real or a logical of 4 bytes. Nor is a kernel rewritten that assigns an
 element of a kernel argument that every iteration assigns (no subscript
-depends on the iteration): an array declared outside the loop that each
+depends on the iteration, and no test such as `if (i == 1)` lets one
+iteration alone assign it): an array declared outside the loop that each
 iteration defines before using it, as a temporary. Fortran gives each
 iteration its own, but a launch passes one array to all threads, so the
 iterations race on it; lanes that wait for each other would make that show
@@ -685,7 +686,21 @@ struct KernelInfo {
     // loop variable only in a later subscript) is shared out as well
     // (give_lanes: only for a launch of few iterations).
     bool scattered_reductions = false;
+    // A kernel that reads vectors of 16 bytes gets lanes for a launch of
+    // any size (GpuKernelLaunch below), so its shared-out loops are not
+    // kept as they were for a launch with one lane: the shared-out form
+    // runs one lane too, and the second copy only made nvcc schedule the
+    // first worse (a quantized matrix-vector product took 5% longer).
+    bool shared_only = false;
     int lanes_count = 1;
+    // The values each private integer scalar of the kernel is assigned,
+    // BLOCKs included (single_iteration_test).
+    std::map<ASR::symbol_t*, std::vector<ASR::expr_t*>> definitions;
+    // The contributions of a combination of array reductions
+    // (GpuReduceCombine), which takes the first lane's: only the first lane
+    // needs their values, so a statement that assigns nothing else runs on
+    // it alone, and they are not handed to the others.
+    std::set<ASR::symbol_t*> first_lane_scalars;
 
     bool local(ASR::symbol_t *s) const {
         if (!ASR::is_a<ASR::Variable_t>(*s)) return false;
@@ -787,6 +802,127 @@ public:
     }
 };
 
+// Whether `e` gives every iteration a value of its own: the number the
+// kernel gives the iteration (GpuBlockIndex * GpuBlockSize +
+// GpuThreadIndex), or such a value plus or minus something the iteration
+// does not change, or a scalar assigned once, one of those (the loop index,
+// `i = __flat_idx + 1`).
+bool iteration_number(const KernelInfo &k, ASR::expr_t *e, int depth = 0) {
+    if (e == nullptr || depth > 16) return false;
+    auto past_casts = [](ASR::expr_t *x) {
+        while (ASR::is_a<ASR::Cast_t>(*x) && ASR::down_cast<ASR::Cast_t>(x)
+                ->m_kind == ASR::cast_kindType::IntegerToInteger) {
+            x = ASR::down_cast<ASR::Cast_t>(x)->m_arg;
+        }
+        return x;
+    };
+    e = past_casts(e);
+    if (ASR::is_a<ASR::Var_t>(*e)) {
+        auto d = k.definitions.find(ASRUtils::symbol_get_past_external(
+            ASR::down_cast<ASR::Var_t>(e)->m_v));
+        return d != k.definitions.end() && d->second.size() == 1
+            && iteration_number(k, d->second[0], depth + 1);
+    }
+    if (!ASR::is_a<ASR::IntegerBinOp_t>(*e)) return false;
+    auto *op = ASR::down_cast<ASR::IntegerBinOp_t>(e);
+    ASR::expr_t *l = past_casts(op->m_left), *r = past_casts(op->m_right);
+    if (op->m_op == ASR::binopType::Add) {
+        auto block_start = [&](ASR::expr_t *x) {
+            if (!ASR::is_a<ASR::IntegerBinOp_t>(*x)) return false;
+            auto *m = ASR::down_cast<ASR::IntegerBinOp_t>(x);
+            ASR::expr_t *a = past_casts(m->m_left), *b = past_casts(m->m_right);
+            return m->m_op == ASR::binopType::Mul
+                && ((ASR::is_a<ASR::GpuBlockIndex_t>(*a)
+                        && ASR::is_a<ASR::GpuBlockSize_t>(*b))
+                    || (ASR::is_a<ASR::GpuBlockSize_t>(*a)
+                        && ASR::is_a<ASR::GpuBlockIndex_t>(*b)));
+        };
+        if ((ASR::is_a<ASR::GpuThreadIndex_t>(*l) && block_start(r))
+                || (ASR::is_a<ASR::GpuThreadIndex_t>(*r) && block_start(l))) {
+            return true;
+        }
+        return (iteration_number(k, l, depth + 1) && !reads_iteration(k, r))
+            || (iteration_number(k, r, depth + 1) && !reads_iteration(k, l));
+    }
+    if (op->m_op == ASR::binopType::Sub) {
+        return iteration_number(k, l, depth + 1) && !reads_iteration(k, r);
+    }
+    return false;
+}
+
+// Whether the test of an `if` holds in one iteration at most: an iteration
+// number, as iteration_number, equal to something the iteration does not
+// change (`if (i == 1)`).
+bool single_iteration_test(const KernelInfo &k, ASR::expr_t *test) {
+    if (!ASR::is_a<ASR::IntegerCompare_t>(*test)) return false;
+    auto *c = ASR::down_cast<ASR::IntegerCompare_t>(test);
+    if (c->m_op != ASR::cmpopType::Eq) return false;
+    return (iteration_number(k, c->m_left) && !reads_iteration(k, c->m_right))
+        || (iteration_number(k, c->m_right)
+            && !reads_iteration(k, c->m_left));
+}
+
+// Whether a statement holds a loop.
+bool holds_loop(const ASR::stmt_t &s) {
+    class Loops : public ASR::BaseWalkVisitor<Loops> {
+    public:
+        bool found = false;
+        std::set<ASR::symbol_t*> blocks;
+        void visit_DoLoop(const ASR::DoLoop_t &) { found = true; }
+        void visit_WhileLoop(const ASR::WhileLoop_t &) { found = true; }
+        void visit_DoConcurrentLoop(const ASR::DoConcurrentLoop_t &) {
+            found = true;
+        }
+        void visit_BlockCall(const ASR::BlockCall_t &x) {
+            ASR::symbol_t *b = ASRUtils::symbol_get_past_external(x.m_m);
+            if (!blocks.insert(b).second) return;
+            ASR::Block_t *block = ASR::down_cast<ASR::Block_t>(b);
+            for (size_t i = 0; i < block->n_body; i++) {
+                visit_stmt(*block->m_body[i]);
+            }
+        }
+    } loops;
+    loops.visit_stmt(s);
+    return loops.found;
+}
+
+// The values the private integer scalars of a kernel are assigned.
+class ScalarDefinitions : public ASR::BaseWalkVisitor<ScalarDefinitions> {
+public:
+    KernelInfo &k;
+    std::set<ASR::symbol_t*> blocks;
+    explicit ScalarDefinitions(KernelInfo &k_) : k(k_) {}
+    void visit_Assignment(const ASR::Assignment_t &x) {
+        if (ASR::is_a<ASR::Var_t>(*x.m_target)) {
+            ASR::symbol_t *s = root_of(x.m_target);
+            if (k.private_scalar(s)
+                    && ASRUtils::is_integer(*ASRUtils::symbol_type(s))) {
+                k.definitions[s].push_back(x.m_value);
+            }
+        }
+        BaseWalkVisitor::visit_Assignment(x);
+    }
+    void visit_DoLoop(const ASR::DoLoop_t &x) {
+        // A loop variable takes many values.
+        if (x.m_head.m_v) {
+            ASR::symbol_t *s = root_of(x.m_head.m_v);
+            if (s != nullptr) {
+                k.definitions[s].push_back(nullptr);
+                k.definitions[s].push_back(nullptr);
+            }
+        }
+        BaseWalkVisitor::visit_DoLoop(x);
+    }
+    void visit_BlockCall(const ASR::BlockCall_t &x) {
+        ASR::symbol_t *b = ASRUtils::symbol_get_past_external(x.m_m);
+        if (!blocks.insert(b).second) return;
+        ASR::Block_t *block = ASR::down_cast<ASR::Block_t>(b);
+        for (size_t i = 0; i < block->n_body; i++) {
+            visit_stmt(*block->m_body[i]);
+        }
+    }
+};
+
 // Whether a statement may assign an element of a kernel argument at a
 // place every iteration assigns: a temporary declared outside the loop,
 // which each iteration defines before it reads it. Each iteration should
@@ -851,6 +987,15 @@ public:
     }
     void visit_If(const ASR::If_t &x) {
         if (stop_record(x.base, nullptr)) return;
+        // What one iteration alone assigns (`if (i == 1) a(1) = 0`) is no
+        // temporary every iteration defines.
+        if (single_iteration_test(k, x.m_test)) {
+            visit_expr(*x.m_test);
+            for (size_t i = 0; i < x.n_orelse; i++) {
+                visit_stmt(*x.m_orelse[i]);
+            }
+            return;
+        }
         BaseWalkVisitor::visit_If(x);
     }
     void call_args(ASR::symbol_t *name, ASR::call_arg_t *args,
@@ -1029,6 +1174,12 @@ public:
             case ASR::stmtType::Exit:
             case ASR::stmtType::Cycle:
             case ASR::stmtType::BlockCall:
+                BaseWalkVisitor::visit_stmt(x);
+                return;
+            case ASR::stmtType::GpuReduceCombine:
+                // Every lane reaches it, and it takes the values of the
+                // first lane of each iteration (asr_to_gpu_c.h): it runs on
+                // all of them.
                 BaseWalkVisitor::visit_stmt(x);
                 return;
             default:
@@ -2196,9 +2347,17 @@ private:
         Effects e(k);
         for (ASR::stmt_t *s : stmts) e.visit_stmt(*s);
         out.push_back(al, b.If(b.Eq(lane_index(loc), b.i32(0)), stmts, {}));
+        // Statements that only add to contributions of the first lane have
+        // nothing for the others to wait for.
+        bool others_need = e.shared_effect || std::any_of(e.scalars.begin(),
+            e.scalars.end(), [&](ASR::symbol_t *v) {
+                return k.first_lane_scalars.count(v) == 0;
+            });
+        if (!others_need) return;
         out.push_back(al, ASRUtils::STMT(ASR::make_GpuLaneBarrier_t(al,
             loc)));
         for (ASR::symbol_t *s : e.scalars) {
+            if (k.first_lane_scalars.count(s)) continue;
             ASR::expr_t *v = b.Var(s);
             out.push_back(al, b.Assignment(v, ASRUtils::EXPR(
                 ASR::make_GpuLaneBroadcast_t(al, loc, v,
@@ -2495,6 +2654,14 @@ private:
             }
             case ASR::stmtType::If:
                 if (stop_record(*s, nullptr)) return Role::Replicate;
+                // What one iteration alone does (`if (i == 1) a(1) = 0`) is
+                // a statement of its own, which its assignments, of places
+                // no other iteration assigns, are not taken apart from.
+                if (single_iteration_test(k,
+                        ASR::down_cast<ASR::If_t>(s)->m_test)
+                        && !holds_loop(*s)) {
+                    break;
+                }
                 if (nested_decide(s, frames)) {
                     Effects test(k);
                     test.visit_expr(*ASR::down_cast<ASR::If_t>(s)->m_test);
@@ -2524,6 +2691,17 @@ private:
             failed = true;
             return Role::Replicate;
         }
+        // A contribution to a combination of array reductions, such as the
+        // sum of the squares of what the first lane just stored, which the
+        // others would otherwise wait for before they read it.
+        if (!e.shared_effect && !e.scalars.empty() && !e.returns
+                && !e.private_array && !e.associates
+                && std::all_of(e.scalars.begin(), e.scalars.end(),
+                    [&](ASR::symbol_t *v) {
+                        return k.first_lane_scalars.count(v) > 0;
+                    })) {
+            return Role::Single;
+        }
         if (!e.shared_effect) return Role::Replicate;
         // Run on the first lane alone. What it assigns has to reach the
         // others, and a return would leave them without it.
@@ -2536,6 +2714,7 @@ private:
         if (leaves.found) failed = true;
         if (writes_shared_temporary(k, *s)) failed = true;
         for (ASR::symbol_t *v : e.scalars) {
+            if (k.first_lane_scalars.count(v)) continue;
             ASR::ttype_t *t = ASRUtils::symbol_type(v);
             if (!(ASRUtils::is_integer(*t) || ASRUtils::is_real(*t)
                     || ASRUtils::is_logical(*t))
@@ -3675,6 +3854,10 @@ private:
         for (auto &f : finals) {
             shared.push_back(al, b.Assignment(f.first, f.second));
         }
+        if (k.shared_only) {
+            for (size_t i = 0; i < shared.n; i++) out.push_back(al, shared[i]);
+            return;
+        }
         Vec<ASR::stmt_t*> alone;
         alone.reserve(al, 1);
         alone.push_back(al, as_it_was);
@@ -3936,6 +4119,7 @@ bool give_lanes(Allocator &al, ASR::Function_t &kernel,
     k.independent_loops = caps.lane_independent_loops;
     k.inner_reductions_first = caps.lane_inner_reductions_first;
     k.lanes_count = caps.lanes_per_iteration;
+    k.shared_only = gpu_reads_wide(kernel, caps);
     // Where lanes share out only reductions (NVIDIA GPUs), a kernel with
     // workspaces or that takes memory from the device heap keeps one lane
     // per iteration: the lanes would share what the iteration builds there
@@ -3964,6 +4148,23 @@ bool give_lanes(Allocator &al, ASR::Function_t &kernel,
     StopScalars stops(k.stop_scalars);
     for (size_t i = 0; i < kernel.n_body; i++) {
         stops.visit_stmt(*kernel.m_body[i]);
+    }
+    for (size_t i = 0; i < kernel.n_body; i++) {
+        if (!ASR::is_a<ASR::GpuReduceCombine_t>(*kernel.m_body[i])) continue;
+        ASR::GpuReduceCombine_t *c = ASR::down_cast<ASR::GpuReduceCombine_t>(
+            kernel.m_body[i]);
+        for (size_t j = 0; j < c->n_items; j++) {
+            if (ASR::is_a<ASR::Var_t>(*c->m_items[j].m_value)) {
+                k.first_lane_scalars.insert(ASRUtils::symbol_get_past_external(
+                    ASR::down_cast<ASR::Var_t>(c->m_items[j].m_value)->m_v));
+            }
+        }
+    }
+    {
+        ScalarDefinitions definitions(k);
+        for (size_t i = 0; i < kernel.n_body; i++) {
+            definitions.visit_stmt(*kernel.m_body[i]);
+        }
     }
     for (bool added = true; added;) {
         IterationScalars iteration(k);
@@ -4045,6 +4246,14 @@ public:
             if (kernel.m_gpu->m_lanes != nullptr
                     && gpu_reads_wide(kernel, caps)) {
                 wide_kernels.insert(&kernel);
+                if (!scattered && caps.lanes_wide > caps.lanes_per_iteration
+                        && kernel_lanes == caps.lanes_per_iteration
+                        && gpu_wide_rows_per_iteration(kernel)
+                            >= wide_block_rows
+                        && kernel.m_gpu->m_lanes_max >= caps.lanes_wide
+                        && kernel.m_gpu->m_lanes_max % caps.lanes_wide == 0) {
+                    kernel.m_gpu->m_lanes_max = caps.lanes_wide;
+                }
             }
         }
         if (kernel.m_gpu->m_lanes == nullptr
@@ -4087,6 +4296,10 @@ public:
         // A kernel whose lanes were cut to the length of a loop they share
         // keeps that many.
         int kernel_lanes = kernel_lane_count[&kernel];
+        // A kernel that reads vectors of 16 bytes runs an iteration on each
+        // block of caps.lanes_wide threads (see `decided` above).
+        bool wide_block = wide_kernels.count(&kernel) && caps.lanes_wide > 0
+            && kernel.m_gpu->m_lanes_max == caps.lanes_wide;
         if (column_kernels.count(&kernel) && kernel_lanes == lanes
                 && caps.lanes_column_block > lanes) {
             kernel_lanes = caps.lanes_column_block;
@@ -4098,7 +4311,8 @@ public:
         // kernel has no use for more lanes than it gets.
         if (kernel.m_gpu->m_lanes_max > caps.lanes_per_iteration) {
             pass_result.push_back(al, b.If(b.LtE(count,
-                b.i_t(block_iterations_max, count_type)),
+                b.i_t(wide_block ? iterations_max : block_iterations_max,
+                    count_type)),
                 {b.Assignment(n, b.i32(kernel.m_gpu->m_lanes_max))}, {}));
         }
         // When every loop the lanes share out is shorter than a few
@@ -4127,11 +4341,20 @@ public:
                         * caps.threads_per_block)));
                 shorter = shorter ? b.And(shorter, test) : test;
             }
+            // Not for a launch of few iterations, which gives each a whole
+            // block because a warp each would leave most of the GPU idle:
+            // a loop that is short does not change that.
             if (shorter) {
-                pass_result.push_back(al, b.If(b.And(shorter,
+                pass_result.push_back(al, b.If(b.And(b.And(shorter,
                     b.Gt(n, b.i32(lanes))),
+                    b.Gt(count, b.i_t(block_iterations_max, count_type))),
                     {b.Assignment(n, b.i32(lanes))}, {}));
             }
+        }
+        // The kernel names those lanes as a constant (gpu_kernel_signature.h),
+        // whatever the size of the launch.
+        if (wide_block) {
+            pass_result.push_back(al, b.Assignment(n, b.i32(caps.lanes_wide)));
         }
         // A tiled launch (gpu_offload.cpp) numbers an iteration in its tile
         // from the thread index along the tile's width and height, which
@@ -4160,6 +4383,34 @@ public:
         arg.m_value = n;
         args.push_back(al, arg);
         auto &launch = const_cast<ASR::GpuKernelLaunch_t&>(x);
+        // An iteration of a kernel that reads vectors of 16 bytes streams
+        // whole rows, and the launch has few of them: blocks of
+        // `threads_per_block` would share them out unevenly between the
+        // multiprocessors (the 320 blocks of 8 warps of a matrix-vector
+        // product of 5120 rows, two rows per iteration, are three on some
+        // of the 132 of an H200 and two on the others, which then wait).
+        // Its launches start blocks of caps.lanes_wide threads, one
+        // iteration each, or of wide_block_iterations warps when the lanes
+        // are a warp.
+        int64_t block_threads = 0;
+        if (wide_kernels.count(&kernel)
+                && ASRUtils::extract_value(ASRUtils::expr_value(
+                    x.m_block_size), block_threads)) {
+            ASR::ttype_t *bt = ASRUtils::expr_type(x.m_block_size);
+            if (wide_block && block_threads >= caps.lanes_wide) {
+                launch.m_block_size = b.i_t(caps.lanes_wide, bt);
+            } else if (block_threads > wide_block_iterations*lanes
+                    && block_threads % (wide_block_iterations*lanes) == 0) {
+                ASR::expr_t *block = b.Variable(current_scope,
+                    current_scope->get_unique_name("__gpu_block_threads"),
+                    ASRUtils::duplicate_type(al, bt), ASR::intentType::Local);
+                pass_result.push_back(al, b.Assignment(block, x.m_block_size));
+                pass_result.push_back(al, b.If(b.Eq(n, b.i32(lanes)),
+                    {b.Assignment(block,
+                        b.i_t(wide_block_iterations*lanes, bt))}, {}));
+                launch.m_block_size = block;
+            }
+        }
         launch.m_args = args.p;
         launch.n_args = args.n;
         pass_result.push_back(al, &launch.base);
@@ -4185,6 +4436,18 @@ private:
     // The most iterations of a launch of such a kernel that get lanes:
     // 32 lanes of them stay within the 32-bit thread index.
     static constexpr int64_t wide_iterations_max = int64_t(1) << 24;
+    // The iterations, a warp each, of a block of a launch of such a kernel.
+    static constexpr int64_t wide_block_iterations = 2;
+    // The rows of a matrix an iteration of a kernel that reads vectors must
+    // read in one loop to get the lanes of caps.lanes_wide threads, as a
+    // hand-written product gives a block to several rows at once. With
+    // fewer rows a warp reads them faster: on an H200, a q8 product of
+    // 5120 rows and 17408 columns, two rows per iteration, took 38.5 us
+    // with a warp and 46.8 us with 64 lanes, and one row per iteration was
+    // 12% slower with 64 lanes; four rows of 34816 by 5120 took 51.6 us
+    // with 64 lanes (and their sums combined together, asr_to_gpu_c.h)
+    // and 54.7 us with a warp.
+    static constexpr int64_t wide_block_rows = 4;
     // A loop of fewer iterations than this many per thread of a block does
     // not get a block of lanes.
     static constexpr int64_t short_loop_threads = 8;

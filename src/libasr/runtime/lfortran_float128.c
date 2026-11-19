@@ -1084,6 +1084,8 @@ static const uint64_t F128_LOG10E[2][2] = {{0x3FFDBCB7B1526E50ULL, 0xE32A6AB7555
 static const uint64_t F128_D2R[2][2] = {{0x3FF91DF46A2529D3ULL, 0x915C1D8BECDD290CULL}, {0xBF87D937FA428857ULL, 0xF250CA38D7EAB25AULL}};
 /* 180/pi, {hi, lo} */
 static const uint64_t F128_R2D[2][2] = {{0x4004CA5DC1A63C1FULL, 0x7B86152EA6FE81A5ULL}, {0xBF9241465BEAED04ULL, 0x1A07E91992EC5EB2ULL}};
+/* 2/sqrt(pi), {hi, lo} */
+static const uint64_t F128_TWO_OVER_SQRT_PI[2][2] = {{0x3FFF20DD750429B6ULL, 0xD11AE3A914FED7FEULL}, {0xBF8DE5DF5FB2F8A2ULL, 0x9E0C574632F53E7AULL}};
 /* log(1 + i/64) for i = -16..32, as {hi, lo} pairs */
 static const uint64_t F128_LOG_TABLE[49][2][2] = {
     {{0xBFFD269621134DB9ULL, 0x2783BEB7676C0AAAULL}, {0x3F8AEAE785B7919AULL, 0x55E432A52FB80667ULL}},
@@ -1183,6 +1185,57 @@ static const uint64_t F128_INV_FACT[32][2] = {
     {0x3F933932C5047D60ULL, 0xE60CADED4C2989C5ULL},
     {0x3F8E434D2E783F5BULL, 0xC42E1EE46FA6BFC4ULL},
 };
+/* 2^(j/32) for j = 0..31, as {hi, lo} pairs */
+static const uint64_t F128_EXP2_TABLE[32][2][2] = {
+    {{0x3FFF000000000000ULL, 0x0000000000000000ULL}, {0x0000000000000000ULL, 0x0000000000000000ULL}},
+    {{0x3FFF059B0D315857ULL, 0x43AE7C548EB68CA4ULL}, {0x3F8B7FE53E3495F7ULL, 0xDF4BAF84A05E2A0DULL}},
+    {{0x3FFF0B5586CF9890ULL, 0xF6298B92B71842AAULL}, {0xBF8DF26F5BAFDD30ULL, 0xC53D757515EA64EBULL}},
+    {{0x3FFF11301D0125B5ULL, 0x0A4EBBF1AED9318DULL}, {0xBF8B53A33B854E99ULL, 0x11A8BD8E8794F00AULL}},
+    {{0x3FFF172B83C7D517ULL, 0xADCDF7C8C50EB14AULL}, {0x3F8DE480D5427FDFULL, 0x5D61A4FC8F09AF74ULL}},
+    {{0x3FFF1D4873168B9AULL, 0xA7805B8028990F08ULL}, {0xBF8D59D2F77E46E7ULL, 0xA64C3EB8A3798E48ULL}},
+    {{0x3FFF2387A6E75623ULL, 0x866C1FADB1C15CB6ULL}, {0xBF8DB13F35EA65BFULL, 0x482586C876FE1A85ULL}},
+    {{0x3FFF29E9DF51FDEEULL, 0x12C25D15F5A24AA4ULL}, {0xBF8D0D5DBD4FDCB7ULL, 0xF0049FD7E5024E5AULL}},
+    {{0x3FFF306FE0A31B71ULL, 0x52DE8D5A46305C86ULL}, {0xBF8B21343D8CBC9DULL, 0x60AFD0E50E934682ULL}},
+    {{0x3FFF371A7373AA9CULL, 0xAA7145502F454798ULL}, {0x3F8DF8F84945AFE7ULL, 0x1A66F90CBB4ECD85ULL}},
+    {{0x3FFF3DEA64C12342ULL, 0x235B41223E13D774ULL}, {0xBF89174D1F51F6EFULL, 0x660EAEEF034400C2ULL}},
+    {{0x3FFF44E086061892ULL, 0xD03136F409DF01A0ULL}, {0xBF8D0AC312DE3D92ULL, 0x1E9B8A8D2C2C336FULL}},
+    {{0x3FFF4BFDAD5362A2ULL, 0x71D4397AFEC42E21ULL}, {0xBF8BFC9C45D1EA63ULL, 0xA8607D1B4EC6CEB0ULL}},
+    {{0x3FFF5342B569D4F8ULL, 0x1DF0A83C49D86A64ULL}, {0xBF8A6331AB837ACFULL, 0xF49F6D7368D8777FULL}},
+    {{0x3FFF5AB07DD48542ULL, 0x958C93015191EB34ULL}, {0x3F8D76235F204A03ULL, 0x81A7EF6D8B2F8A0CULL}},
+    {{0x3FFF6247EB03A558ULL, 0x4B1F0FA06FD2DA43ULL}, {0xBF8D138C54182337ULL, 0x6291D44341893B79ULL}},
+    {{0x3FFF6A09E667F3BCULL, 0xC908B2FB1366EA95ULL}, {0x3F8DF4F8EB7B05D4ULL, 0x49DD426768BD642CULL}},
+    {{0x3FFF71F75E8EC5F7ULL, 0x3DD2370F2EF0ACD7ULL}, {0xBF8CA5E5A54E930BULL, 0xAEFA912CDD2876C1ULL}},
+    {{0x3FFF7A11473EB018ULL, 0x6D7D51023F6CDA1FULL}, {0x3F8D7BD0AD9A5DE5ULL, 0x814C7A086CD25F01ULL}},
+    {{0x3FFF82589994CCE1ULL, 0x28ACF88AFAB34A01ULL}, {0x3F8AED5ACB977581ULL, 0xEA65A737BFBFB9CBULL}},
+    {{0x3FFF8ACE5422AA0DULL, 0xB5BA7C55A192C9BBULL}, {0x3F8CF376B0F93999ULL, 0x8251A36C7686006EULL}},
+    {{0x3FFF93737B0CDC5EULL, 0x4F4501C3F2540A23ULL}, {0xBF8C681DA853F24EULL, 0x0BE6C880B22FDC00ULL}},
+    {{0x3FFF9C49182A3F09ULL, 0x01C7C46B071F2BE6ULL}, {0xBF8DC89486BCF7A3ULL, 0x9E4DBD2EA21633A8ULL}},
+    {{0x3FFFA5503B23E255ULL, 0xC8B424491CAF87BDULL}, {0xBF8DFEBD6FEB1FA3ULL, 0xF0420D402C4CE7E6ULL}},
+    {{0x3FFFAE89F995AD3AULL, 0xD5E8734D1773205AULL}, {0x3F8DFEF0EB99D7A9ULL, 0x102C58B5AE09D6D0ULL}},
+    {{0x3FFFB7F76F2FB5E4ULL, 0x6EAA7B081AB53C53ULL}, {0x3F8D532240F0D5B9ULL, 0x2D896AB309D868EEULL}},
+    {{0x3FFFC199BDD85529ULL, 0xC2220CB12A091BA6ULL}, {0x3F8D9E51125928D9ULL, 0x98490010E5CCE9F9ULL}},
+    {{0x3FFFCB720DCEF906ULL, 0x91503CBD1E949DB7ULL}, {0x3F8D8765566B032DULL, 0xB74FB56677E6ADB1ULL}},
+    {{0x3FFFD5818DCFBA48ULL, 0x725DA05AEB66E0DDULL}, {0xBF8D5829D82A98FDULL, 0xE240371F413970BAULL}},
+    {{0x3FFFDFC97337B9B5ULL, 0xEB968CAC39ED291BULL}, {0x3F8DC896A513BF56ULL, 0xED5492E49C943842ULL}},
+    {{0x3FFFEA4AFA2A490DULL, 0x9858F73A18F5DB30ULL}, {0x3F8BF86DEA20610CULL, 0xEEE13EB7BB006527ULL}},
+    {{0x3FFFF50765B6E454ULL, 0x0674F84B762862BBULL}, {0xBF859BFFC80EF2B5ULL, 0x17591DBDDA6B205BULL}},
+};
+/* 1/k! for k = 0..12, as {hi, lo} pairs */
+static const uint64_t F128_INV_FACT_DW[13][2][2] = {
+    {{0x3FFF000000000000ULL, 0x0000000000000000ULL}, {0x0000000000000000ULL, 0x0000000000000000ULL}},
+    {{0x3FFF000000000000ULL, 0x0000000000000000ULL}, {0x0000000000000000ULL, 0x0000000000000000ULL}},
+    {{0x3FFE000000000000ULL, 0x0000000000000000ULL}, {0x0000000000000000ULL, 0x0000000000000000ULL}},
+    {{0x3FFC555555555555ULL, 0x5555555555555555ULL}, {0x3F8A555555555555ULL, 0x5555555555555555ULL}},
+    {{0x3FFA555555555555ULL, 0x5555555555555555ULL}, {0x3F88555555555555ULL, 0x5555555555555555ULL}},
+    {{0x3FF8111111111111ULL, 0x1111111111111111ULL}, {0x3F84111111111111ULL, 0x1111111111111111ULL}},
+    {{0x3FF56C16C16C16C1ULL, 0x6C16C16C16C16C17ULL}, {0xBF82F49F49F49F49ULL, 0xF49F49F49F49F49FULL}},
+    {{0x3FF2A01A01A01A01ULL, 0xA01A01A01A01A01AULL}, {0x3F7AA01A01A01A01ULL, 0xA01A01A01A01A01AULL}},
+    {{0x3FEFA01A01A01A01ULL, 0xA01A01A01A01A01AULL}, {0x3F77A01A01A01A01ULL, 0xA01A01A01A01A01AULL}},
+    {{0x3FEC71DE3A556C73ULL, 0x38FAAC1C88E50017ULL}, {0x3F78DE3A556C7338ULL, 0xFAAC1C88E500171EULL}},
+    {{0x3FE927E4FB7789F5ULL, 0xC72EF016D3EA6679ULL}, {0xBF75B49E220FA3D2ULL, 0x6AA982C5AF3320B5ULL}},
+    {{0x3FE5AE64567F544EULL, 0x38FE747E4B837DC7ULL}, {0x3F71E202B72F11B6ULL, 0xAAAC590F0129FEF9ULL}},
+    {{0x3FE21EED8EFF8D89ULL, 0x7B544DA987ACFE85ULL}, {0xBF7004FF8C22D261ULL, 0x8E389BD2D523AAD7ULL}},
+};
 /* 1/(2k+1) for k = 0..31 */
 static const uint64_t F128_INV_ODD[32][2] = {
     {0x3FFF000000000000ULL, 0x0000000000000000ULL},
@@ -1217,6 +1270,64 @@ static const uint64_t F128_INV_ODD[32][2] = {
     {0x3FF915B1E5F75270ULL, 0xD0456C797DD49C34ULL},
     {0x3FF90C9714FBCDA3ULL, 0xAC10C9714FBCDA3BULL},
     {0x3FF9041041041041ULL, 0x0410410410410410ULL},
+};
+/* log(2 pi)/2, {hi, lo} */
+static const uint64_t F128_HALF_LN_2PI[2][2] = {{0x3FFED67F1C864BEBULL, 0x4A69297920028832ULL}, {0x3F8C011E7D847C68ULL, 0x9A2C5A6EF635189AULL}};
+/* Euler's constant, {hi, lo} */
+static const uint64_t F128_EULER[2][2] = {{0x3FFE2788CFC6FB61ULL, 0x8F49A37C7F0202A6ULL}, {0xBF8CA54AF1899E28ULL, 0x4D19FF379FE1065CULL}};
+/* B_2k / (2k (2k-1)) for k = 2..16, the Stirling series of log Gamma */
+static const uint64_t F128_STIRLING[15][2] = {
+    {0xBFF66C16C16C16C1ULL, 0x6C16C16C16C16C17ULL},
+    {0x3FF4A01A01A01A01ULL, 0xA01A01A01A01A01AULL},
+    {0xBFF4381381381381ULL, 0x3813813813813814ULL},
+    {0x3FF4B951E2B18FF2ULL, 0x3570EA73806E5479ULL},
+    {0xBFF5F6AB0D9993C7ULL, 0xC81F6AB0D9993C7DULL},
+    {0x3FF7A41A41A41A41ULL, 0xA41A41A41A41A41AULL},
+    {0xBFF9E4286CB0F539ULL, 0x7DC2064A8ED3175CULL},
+    {0x3FFC6FE96381E067ULL, 0xFFA1876FE96381E0ULL},
+    {0xBFFF6476701181F3ULL, 0x9EDBDB9CE625987DULL},
+    {0x4002ACE44322CE00ULL, 0x5A74F53910C8B380ULL},
+    {0xC00639B2525CCCC1ULL, 0xAAB67EE25D73C0F9ULL},
+    {0x400A12234E81B4E8ULL, 0x1B4E81B4E81B4E82ULL},
+    {0xC00E1A198AE1C4ABULL, 0x7EB3FEDDD8496920ULL},
+    {0x401251A2089A6E11ULL, 0xA38433DC9FB888D4ULL},
+    {0xC016D1089B142D35ULL, 0x77880C2D3577880CULL},
+};
+/* (-1)^k zeta(k)/k for k = 2..16, the Taylor coefficients of log Gamma(1+e) */
+static const uint64_t F128_LGAMMA1_TAYLOR[15][2] = {
+    {0x3FFEA51A6625307DULL, 0x3230E7B122440176ULL},
+    {0xBFFD9A4D55BEAB2DULL, 0x6F59EC9725CD336BULL},
+    {0x3FFD151322AC7D84ULL, 0x836BF2242232DCA4ULL},
+    {0xBFFCA8B9C17AA614ULL, 0x925D04D49FB5C332ULL},
+    {0x3FFC5B40CB100C30ULL, 0x614A79940F15695BULL},
+    {0xBFFC2703A1DCEA3AULL, 0xE58C1FF41E52B0E0ULL},
+    {0x3FFC010B36AF8639ULL, 0x6E8BE59CA4DDB5A6ULL},
+    {0xBFFBC806706D57DBULL, 0x455AAA01BF74FB64ULL},
+    {0x3FFB9A01E385D5F8ULL, 0xF3026831E6ED19ADULL},
+    {0xBFFB748C33114C6DULL, 0x60F52BB1204038FEULL},
+    {0x3FFB556AD63243BCULL, 0x40577A1603EBA074ULL},
+    {0xBFFB3B1D971FC598ULL, 0x4C34F3F036D8406DULL},
+    {0x3FFB2496DF8320C5ULL, 0xF73D2D2B8102FA15ULL},
+    {0xBFFB11133476E7FEULL, 0x03B9349FE72DDC6AULL},
+    {0x3FFB00010064CDEBULL, 0x22F0F3A02AD5FFB8ULL},
+};
+/* (-1)^k (zeta(k) - 1)/k for k = 2..16, those of log Gamma(2+e) */
+static const uint64_t F128_LGAMMA2_TAYLOR[15][2] = {
+    {0x3FFD4A34CC4A60FAULL, 0x6461CF62448802EBULL},
+    {0xBFFB13E001A55760ULL, 0x68125D0741DF7858ULL},
+    {0x3FF951322AC7D848ULL, 0x36BF2242232DCA47ULL},
+    {0xBFF7E404FC218F5FULL, 0x186D6760C385330EULL},
+    {0x3FF67ADD6EADB6C2ULL, 0xFD490FAE70050172ULL},
+    {0xBFF538AC5C2BF8E0ULL, 0x7CEB67C604C626F6ULL},
+    {0x3FF40B36AF86396EULL, 0x8BE59CA4DDB5A64DULL},
+    {0xBFF2D3FD4C76D2FCULL, 0x7C70754606688FA5ULL},
+    {0x3FF1A127B0F17D65ULL, 0xA33A61354E004CF2ULL},
+    {0xBFF078DE5BD7C81EULL, 0xEF2EFD5F190DC2CDULL},
+    {0x3FEF580DCEE66EB0ULL, 0x224C0AE964B1EE44ULL},
+    {0xBFEE3CBC963CE224ULL, 0x2856A464E0AB35D5ULL},
+    {0x3FED2597A39F34AAULL, 0xB901BBAE75609FD8ULL},
+    {0xBFEC11B2EB767954ULL, 0x11C76B0E65AC639BULL},
+    {0x3FEB0064CDEB22F0ULL, 0xF3A02AD5FFB78217ULL},
 };
 /* Bits of 2/pi after the binary point, most significant first */
 static const uint64_t F128_TWO_OVER_PI_BITS[262] = {
@@ -1350,26 +1461,27 @@ static f128_dw fast_two_sum(lf_float128 a, lf_float128 b) {
     return dw_make(s, f_sub(b, f_sub(s, a)));
 }
 
-/* Veltkamp splitting a = hi + lo, each part with at most 56 significant
- * bits, so that the products of two parts are exact. */
-static void f128_split(lf_float128 a, lf_float128 *hi, lf_float128 *lo) {
-    /* 2^57 + 1 */
-    lf_float128 c = f_mul(f128_const(0, 16383 + 57, 0, (uint64_t)1 << 55), a);
-    *hi = f_sub(c, f_sub(c, a));
-    *lo = f_sub(a, *hi);
-}
-
-/* p + e = a * b exactly, p = fl(a * b) (Dekker). |a|, |b| < 2^16000. */
+/* p + e = a * b, p = fl(a * b). e is the difference between the exact
+ * product of the significands and p, which has at most 113 bits, so the sum
+ * is exact unless e underflows. e is 0 when p is zero, infinite or NaN, or
+ * subnormal with more than 113 bits lost. */
 static f128_dw two_prod(lf_float128 a, lf_float128 b) {
     lf_float128 p = f_mul(a, b);
-    lf_float128 ah, al, bh, bl;
-    f128_split(a, &ah, &al);
-    f128_split(b, &bh, &bl);
-    lf_float128 e = f_sub(f_mul(ah, bh), p);
-    e = f_add(e, f_mul(ah, bl));
-    e = f_add(e, f_mul(al, bh));
-    e = f_add(e, f_mul(al, bl));
-    return dw_make(p, e);
+    f128_parts pa = f128_unpack(a), pb = f128_unpack(b), pp = f128_unpack(p);
+    if (pp.is_nan || pp.is_inf || pp.is_zero) {
+        return dw_make(p, f128_make_zero(0));
+    }
+    /* a * b = prod * 2^e0 and p = pp.mant * 2^(e0 + k) */
+    u128 prod_hi, prod_lo;
+    u128_mul128(pa.mant, pb.mant, &prod_hi, &prod_lo);
+    int32_t e0 = pa.exp + pb.exp - 224;
+    int32_t k = pp.exp - 112 - e0;
+    if (k < 0 || k > 113) return dw_make(p, f128_make_zero(0));
+    /* |prod - pp.mant * 2^k| <= 2^(k-1), so its low 128 bits are exact */
+    u128 d = u128_sub(prod_lo, u128_shl(pp.mant, k));
+    int neg = u128_bit(d, 127);
+    if (neg) d = u128_sub(u128_zero(), d);
+    return dw_make(p, f128_pack_parts(pa.sign ^ pb.sign ^ neg, e0 + 112, d));
 }
 
 static f128_dw dw_add(f128_dw a, f128_dw b) {
@@ -1378,6 +1490,11 @@ static f128_dw dw_add(f128_dw a, f128_dw b) {
 }
 
 static f128_dw dw_neg(f128_dw a) { return dw_make(f_neg(a.hi), f_neg(a.lo)); }
+
+/* 2^n * a, exact unless a part underflows. */
+static f128_dw dw_scale(f128_dw a, int32_t n) {
+    return dw_make(f128_scale(a.hi, n), f128_scale(a.lo, n));
+}
 
 static f128_dw dw_mul(f128_dw a, f128_dw b) {
     f128_dw p = two_prod(a.hi, b.hi);
@@ -1416,21 +1533,71 @@ static lf_float128 f128_poly(lf_float128 x, const uint64_t (*c)[2],
     return r;
 }
 
-/* exp(r) - 1 for |r| <= 0.36 (Taylor series). */
-static lf_float128 f128_expm1_kernel(lf_float128 r) {
-    lf_float128 q = f128_poly(r, F128_INV_FACT, 2, 26, 1);
-    return f_add(r, f_mul(f_mul(r, r), q));
+/* sum_j x^j / k_j! with k_j = first + j * step, as a double-word: the
+ * terms through k_j = last in double-word Horner form, the following ones
+ * through k_j = end in single word. |x| < first + 1, so that each step
+ * s = 1/k! + x * s adds a smaller term to 1/k!. */
+static f128_dw f128_fact_series_dw(f128_dw x, int first, int last, int end,
+                                   int step) {
+    f128_dw s = dw_make(f128_poly(x.hi, F128_INV_FACT, last + step, end, step),
+                        f128_make_zero(0));
+    for (int k = last; k >= first; k -= step) {
+        f128_dw c = dw_from_bits(F128_INV_FACT_DW[k]);
+        f128_dw p = two_prod(x.hi, s.hi);
+        f128_dw t = fast_two_sum(c.hi, p.hi);
+        lf_float128 lo = f_add(t.lo, f_add(p.lo, c.lo));
+        lo = f_add(lo, f_add(f_mul(x.hi, s.lo), f_mul(x.lo, s.hi)));
+        s = fast_two_sum(t.hi, lo);
+    }
+    return s;
 }
 
-/* exp(xh + xl) = 2^n * (1 + p) for |xh| < 11500; returns p, sets n. */
-static lf_float128 f128_exp_core(lf_float128 xh, lf_float128 xl,
-                                 int32_t *n) {
-    *n = (int32_t)floor(f_dbl(xh) * 1.4426950408889634 + 0.5);
-    lf_float128 nf = f_int(*n);
-    /* n * LN2_HI98 is exact and so is the difference. */
-    lf_float128 r = f_sub(xh, f_mul(nf, f128_bits(F128_LN2_HI98)));
-    r = f_add(f_sub(r, f_mul(nf, f128_bits(F128_LN2_LO98))), xl);
-    return f128_expm1_kernel(r);
+/* exp(r) - 1 for |r| <= 0.35, as a double-word (Taylor series). The terms
+ * from r^9/9! on, below 2^-30 relative, are single-word, so the relative
+ * error is below 2^-140. */
+static f128_dw f128_expm1_kernel(f128_dw r) {
+    return dw_mul(r, f128_fact_series_dw(r, 1, 8, 26, 1));
+}
+
+/* exp(x.hi + x.lo) = 2^n * m for |x.hi| < 22000, m in [0.98, 2) as a
+ * double-word with a relative error below 2^-140; sets n.
+ * x = (32 n + j) log(2)/32 + r with |r| <= log(2)/64, so that
+ * exp(x) = 2^n 2^(j/32) exp(r); exp(r) - 1 is a Taylor series whose terms
+ * from r^5/5! on (below 2^-32 relative) are single-word. */
+static f128_dw f128_exp_core(f128_dw x, int32_t *n) {
+    int32_t nj = (int32_t)floor(f_dbl(x.hi) * 46.16624130844683 + 0.5);
+    int j = ((nj % 32) + 32) % 32;
+    *n = (nj - j) / 32;
+    f128_dw l = dw_scale(dw_from_bits(F128_LN2), -5);
+    lf_float128 nf = f_int(nj);
+    f128_dw p = two_prod(nf, l.hi);
+    /* x.hi and p.hi are within a factor of 2 (or p.hi = 0), so the
+     * difference is exact. */
+    lf_float128 rh = f_sub(x.hi, p.hi);
+    f128_dw r = two_sum(rh, f_sub(f_sub(x.lo, p.lo), f_mul(nf, l.lo)));
+    f128_dw e = dw_mul(r, f128_fact_series_dw(r, 1, 4, 16, 1));
+    f128_dw t = dw_from_bits(F128_EXP2_TABLE[j]);
+    return dw_add(t, dw_mul(t, e));
+}
+
+/* exp(x.hi + x.lo), rounded once (twice if the result is subnormal). */
+static lf_float128 f128_exp_dw(f128_dw x) {
+    double d = f_dbl(x.hi);
+    if (d > 11357.0) return f128_make_inf(0);
+    if (d < -11434.0) return f128_make_zero(0);
+    int32_t n;
+    f128_dw m = f128_exp_core(x, &n);
+    return f128_scale(m.hi, n);
+}
+
+/* exp(a) - 1 as a double-word, for |a| <= 100. */
+static f128_dw f128_expm1_dw(lf_float128 a) {
+    lf_float128 zero = f128_make_zero(0);
+    f128_dw x = dw_make(a, zero);
+    if (fabs(f_dbl(a)) < 0.35) return f128_expm1_kernel(x);
+    int32_t n;
+    f128_dw m = f128_exp_core(x, &n);
+    return dw_add(dw_scale(m, n), dw_make(f_neg(f128_one()), zero));
 }
 
 lf_float128 lf_f128_exp(lf_float128 a) {
@@ -1438,12 +1605,7 @@ lf_float128 lf_f128_exp(lf_float128 a) {
     if (p.is_nan) return a;
     if (p.is_inf) return p.sign ? f128_make_zero(0) : a;
     if (p.is_zero) return f128_one();
-    double d = f_dbl(a);
-    if (d > 11357.0) return f128_make_inf(0);
-    if (d < -11434.0) return f128_make_zero(0);
-    int32_t n;
-    lf_float128 q = f128_exp_core(a, f128_make_zero(0), &n);
-    return f128_scale(f_add(f128_one(), q), n);
+    return f128_exp_dw(dw_make(a, f128_make_zero(0)));
 }
 
 lf_float128 lf_f128_expm1(lf_float128 a) {
@@ -1451,15 +1613,10 @@ lf_float128 lf_f128_expm1(lf_float128 a) {
     if (p.is_nan || p.is_zero) return a;
     if (p.is_inf) return p.sign ? f_neg(f128_one()) : a;
     double d = f_dbl(a);
-    if (d > -0.35 && d < 0.35) return f128_expm1_kernel(a);
-    if (d > 11357.0) return f128_make_inf(0);
+    /* exp(a) > 2^144: the -1 does not change the rounding */
+    if (d > 100.0) return lf_f128_exp(a);
     if (d < -80.0) return f_neg(f128_one());
-    int32_t n;
-    lf_float128 q = f128_exp_core(a, f128_make_zero(0), &n);
-    if (n > 113) return f_sub(f128_scale(f_add(f128_one(), q), n), f128_one());
-    /* 2^n - 1 is exact for -113 <= n <= 113. */
-    lf_float128 two_n = f128_scale(f128_one(), n);
-    return f_add(f_sub(two_n, f128_one()), f128_scale(q, n));
+    return f128_expm1_dw(a).hi;
 }
 
 lf_float128 lf_f128_exp2(lf_float128 a) {
@@ -1472,10 +1629,9 @@ lf_float128 lf_f128_exp2(lf_float128 a) {
     if (d < -16495.0) return f128_make_zero(0);
     int32_t n = (int32_t)floor(d + 0.5);
     lf_float128 r = f_sub(a, f_int(n));   /* exact */
-    f128_dw y = dw_mul_q(dw_from_bits(F128_LN2), r);
     int32_t m;
-    lf_float128 q = f128_exp_core(y.hi, y.lo, &m);
-    return f128_scale(f_add(f128_one(), q), n + m);
+    f128_dw e = f128_exp_core(dw_mul_q(dw_from_bits(F128_LN2), r), &m);
+    return f128_scale(e.hi, n + m);
 }
 
 /* log(a) as a double-word, for a finite and positive.
@@ -1504,19 +1660,26 @@ static f128_dw f128_log_dw(lf_float128 a) {
     lf_float128 rr = f_sub(f_sub(f, pr.hi), pr.lo);
     rr = f_sub(rr, f_mul(uh, s.lo));
     lf_float128 ul = f_div(rr, s.hi);
-    /* 2*atanh(u) = 2u + 2u * v * (1/3 + v/5 + ...), v = u^2 */
-    lf_float128 v = f_mul(uh, uh);
-    lf_float128 tail = f_mul(f_mul(f128_scale(uh, 1), v),
-                             f128_poly(v, F128_INV_ODD, 1, 9, 1));
+    /* 2*atanh(u) = 2u + 2u^3/3 + 2u * v^2 * (1/5 + v/7 + ...), v = u^2,
+     * with 2u^3/3 (up to 2^-15 of the result) in double-word; ul adds
+     * 2 ul (1 + v). */
+    lf_float128 zero = f128_make_zero(0);
+    f128_dw v = two_prod(uh, uh);
+    f128_dw c3 = dw_div(dw_scale(dw_mul_q(v, uh), 1), dw_make(f_int(3), zero));
+    lf_float128 tail = f_mul(f_mul(f128_scale(uh, 1), f_mul(v.hi, v.hi)),
+                             f128_poly(v.hi, F128_INV_ODD, 2, 9, 1));
+    tail = f_add(tail, f_mul(f128_scale(ul, 1), f_add(f128_one(), v.hi)));
     f128_dw lf = dw_from_bits(F128_LOG_TABLE[i + 16]);
     lf_float128 kf = f_int(k);
     f128_dw s1 = two_sum(f_mul(kf, f128_bits(F128_LN2_HI98)), lf.hi);
     f128_dw s2 = two_sum(s1.hi, f128_scale(uh, 1));
+    f128_dw s3 = two_sum(s2.hi, c3.hi);
     lf_float128 lo = f_add(s1.lo, s2.lo);
+    lo = f_add(lo, s3.lo);
     lo = f_add(lo, f_mul(kf, f128_bits(F128_LN2_LO98)));
     lo = f_add(lo, lf.lo);
-    lo = f_add(lo, f_add(f128_scale(ul, 1), tail));
-    return fast_two_sum(s2.hi, lo);
+    lo = f_add(lo, f_add(c3.lo, tail));
+    return fast_two_sum(s3.hi, lo);
 }
 
 /* NaN, -inf, +inf or a result for the special arguments of log;
@@ -1548,16 +1711,16 @@ lf_float128 lf_f128_log10(lf_float128 a) {
     return dw_mul(f128_log_dw(a), dw_from_bits(F128_LOG10E)).hi;
 }
 
-/* log(1 + a) */
-static lf_float128 f128_log1p(lf_float128 a) {
-    f128_parts p = f128_unpack(a);
-    if (p.is_nan || p.is_zero) return a;
-    if (p.is_inf) return p.sign ? f128_make_nan() : a;
-    f128_dw s = two_sum(f128_one(), a);
-    lf_float128 r;
-    if (f128_log_special(s.hi, &r)) return r;
-    f128_dw l = f128_log_dw(s.hi);
-    return f_add(l.hi, f_add(l.lo, f_div(s.lo, s.hi)));
+/* log(a.hi + a.lo) as a double-word, for a.hi finite and positive. */
+static f128_dw f128_log_dw2(f128_dw a) {
+    return dw_add(f128_log_dw(a.hi),
+                  dw_make(f_div(a.lo, a.hi), f128_make_zero(0)));
+}
+
+/* log(1 + a.hi + a.lo) as a double-word, for a > -1. */
+static f128_dw f128_log1p_dw(f128_dw a) {
+    f128_dw s = two_sum(f128_one(), a.hi);
+    return f128_log_dw2(dw_make(s.hi, f_add(s.lo, a.lo)));
 }
 
 /* 0 if b is not an integer, 1 if it is an odd and 2 if an even integer.
@@ -1617,43 +1780,28 @@ lf_float128 lf_f128_pow(lf_float128 base, lf_float128 exp_v) {
     f128_dw y = large ? dw_make(exp_v, f128_make_zero(0))
                       : dw_mul_q(f128_log_dw(ax), exp_v);
     if (large && (f128_cmp_internal(ax, one) < 0)) y.hi = f_neg(y.hi);
-    double d = f_dbl(y.hi);
-    if (d > 11357.0) return f128_make_inf(rsign);
-    if (d < -11434.0) return f128_make_zero(rsign);
-    int32_t n;
-    lf_float128 q = f128_exp_core(y.hi, y.lo, &n);
-    return f_sign(f128_scale(f_add(one, q), n), rsign);
+    return f_sign(f128_exp_dw(y), rsign);
 }
 
 /* ========================================================================
- * L. Math: sin, cos, tan, asin, acos, atan, atan2 and their degree
- *    variants sind, cosd, tand, asind, acosd, atand
+ * L. Math: sin, cos, tan, asin, acos, atan, atan2, their degree
+ *    variants sind, cosd, tand, asind, acosd, atand and their half
+ *    revolution variants sinpi, cospi, tanpi, asinpi, acospi, atanpi
  * ======================================================================== */
 
-/* sin(r.hi + r.lo) for |r| <= ~pi/4 (Taylor series). */
-static lf_float128 f128_sin_kernel(f128_dw r) {
-    lf_float128 x = r.hi;
-    lf_float128 z = f_mul(x, x);
-    /* sin(x) = x - x*z*(1/3! - z/5! + ...),
-     * sin(x + lo) ~= sin(x) + lo*(1 - z/2) */
-    lf_float128 q = f128_poly(f_neg(z), F128_INV_FACT, 3, 31, 2);
-    lf_float128 t = f_mul(r.lo, f_sub(f128_one(), f128_scale(z, -1)));
-    t = f_sub(t, f_mul(f_mul(x, z), q));
-    return f_add(x, t);
+/* sin(r.hi + r.lo) for |r| <= ~pi/4, as a double-word:
+ * r (1 - u/3! + u^2/5! - ...) with u = r^2; the terms from u^5/11! on,
+ * below 2^-28 relative, are single-word. */
+static f128_dw f128_sin_dw(f128_dw r) {
+    f128_dw u = dw_neg(dw_mul(r, r));
+    return dw_mul(r, f128_fact_series_dw(u, 1, 9, 31, 2));
 }
 
-/* cos(r.hi + r.lo) for |r| <= ~pi/4 (Taylor series). */
-static lf_float128 f128_cos_kernel(f128_dw r) {
-    lf_float128 x = r.hi;
-    lf_float128 z = f_mul(x, x);
-    lf_float128 hz = f128_scale(z, -1);
-    lf_float128 w = f_sub(f128_one(), hz);
-    lf_float128 corr = f_sub(f_sub(f128_one(), w), hz);   /* exact */
-    /* cos(x) = 1 - z/2 + z^2*(1/4! - z/6! + ...),
-     * cos(x + lo) ~= cos(x) - lo*x */
-    lf_float128 q = f128_poly(f_neg(z), F128_INV_FACT, 4, 30, 2);
-    lf_float128 t = f_sub(f_mul(f_mul(z, z), q), f_mul(x, r.lo));
-    return f_add(w, f_add(corr, t));
+/* cos(r.hi + r.lo) for |r| <= ~pi/4, as a double-word:
+ * 1 - u/2! + u^2/4! - ... with u = r^2; the terms from u^6/12! on,
+ * below 2^-33 relative, are single-word. */
+static f128_dw f128_cos_dw(f128_dw r) {
+    return f128_fact_series_dw(dw_neg(dw_mul(r, r)), 0, 10, 30, 2);
 }
 
 /* The bit of a little-endian multiword integer, 0 for negative positions. */
@@ -1781,10 +1929,10 @@ lf_float128 lf_f128_sin(lf_float128 a) {
     if (p.is_zero) return a;
     f128_dw r;
     switch (f128_rem_pio2(a, &r)) {
-        case 0:  return f128_sin_kernel(r);
-        case 1:  return f128_cos_kernel(r);
-        case 2:  return f_neg(f128_sin_kernel(r));
-        default: return f_neg(f128_cos_kernel(r));
+        case 0:  return f128_sin_dw(r).hi;
+        case 1:  return f128_cos_dw(r).hi;
+        case 2:  return f_neg(f128_sin_dw(r).hi);
+        default: return f_neg(f128_cos_dw(r).hi);
     }
 }
 
@@ -1794,19 +1942,19 @@ lf_float128 lf_f128_cos(lf_float128 a) {
     if (p.is_zero) return f128_one();
     f128_dw r;
     switch (f128_rem_pio2(a, &r)) {
-        case 0:  return f128_cos_kernel(r);
-        case 1:  return f_neg(f128_sin_kernel(r));
-        case 2:  return f_neg(f128_cos_kernel(r));
-        default: return f128_sin_kernel(r);
+        case 0:  return f128_cos_dw(r).hi;
+        case 1:  return f_neg(f128_sin_dw(r).hi);
+        case 2:  return f_neg(f128_cos_dw(r).hi);
+        default: return f128_sin_dw(r).hi;
     }
 }
 
 /* tan for x = n*pi/2 + r */
 static lf_float128 f128_tan_reduced(int n, f128_dw r) {
-    lf_float128 s = f128_sin_kernel(r);
-    lf_float128 c = f128_cos_kernel(r);
-    if (n & 1) return f_neg(f_div(c, s));
-    return f_div(s, c);
+    f128_dw s = f128_sin_dw(r);
+    f128_dw c = f128_cos_dw(r);
+    if (n & 1) return f_neg(dw_div(c, s).hi);
+    return dw_div(s, c).hi;
 }
 
 lf_float128 lf_f128_tan(lf_float128 a) {
@@ -1897,13 +2045,13 @@ lf_float128 lf_f128_atan(lf_float128 a) {
     return f128_atan_dw(a).hi;
 }
 
-lf_float128 lf_f128_atan2(lf_float128 y, lf_float128 x) {
+/* atan2(y, x) as a double-word, for y and x not NaN. */
+static f128_dw f128_atan2_dw(lf_float128 y, lf_float128 x) {
     f128_parts px = f128_unpack(x), py = f128_unpack(y);
-    if (px.is_nan || py.is_nan) return f128_make_nan();
     f128_dw r;
     if (py.is_zero) {
         /* atan2(+-0, x) = +-0 for x > 0 or x = +0, +-pi otherwise */
-        if (!px.sign) return y;
+        if (!px.sign) return dw_make(y, f128_make_zero(0));
         r = f128_pi_dw();
     } else if (px.is_inf) {
         f128_dw pi = f128_pi_dw();
@@ -1922,7 +2070,12 @@ lf_float128 lf_f128_atan2(lf_float128 y, lf_float128 x) {
                            dw_make(lf_f128_abs(x), zero));
         if (px.sign) r = dw_add(f128_pi_dw(), dw_neg(r));
     }
-    return py.sign ? f_neg(r.hi) : r.hi;
+    return py.sign ? dw_neg(r) : r;
+}
+
+lf_float128 lf_f128_atan2(lf_float128 y, lf_float128 x) {
+    if (f128_is_nan(x) || f128_is_nan(y)) return f128_make_nan();
+    return f128_atan2_dw(y, x).hi;
 }
 
 /* 1 - a^2 as a double-word, for |a| < 1 */
@@ -2030,10 +2183,10 @@ lf_float128 lf_f128_sind(lf_float128 a) {
     f128_dw r = f128_deg_to_rad(rd);
     lf_float128 s;
     switch (n) {
-        case 0:  s = f128_sin_kernel(r); break;
-        case 1:  s = f128_cos_kernel(r); break;
-        case 2:  s = f_neg(f128_sin_kernel(r)); break;
-        default: s = f_neg(f128_cos_kernel(r)); break;
+        case 0:  s = f128_sin_dw(r).hi; break;
+        case 1:  s = f128_cos_dw(r).hi; break;
+        case 2:  s = f_neg(f128_sin_dw(r).hi); break;
+        default: s = f_neg(f128_cos_dw(r).hi); break;
     }
     return f_sign(s, p.sign);
 }
@@ -2047,10 +2200,10 @@ lf_float128 lf_f128_cosd(lf_float128 a) {
     if ((n & 1) && f128_is_zero(rd)) return f128_make_zero(0);
     f128_dw r = f128_deg_to_rad(rd);
     switch (n) {
-        case 0:  return f128_cos_kernel(r);
-        case 1:  return f_neg(f128_sin_kernel(r));
-        case 2:  return f_neg(f128_cos_kernel(r));
-        default: return f128_sin_kernel(r);
+        case 0:  return f128_cos_dw(r).hi;
+        case 1:  return f_neg(f128_sin_dw(r).hi);
+        case 2:  return f_neg(f128_cos_dw(r).hi);
+        default: return f128_sin_dw(r).hi;
     }
 }
 
@@ -2089,6 +2242,127 @@ lf_float128 lf_f128_atand(lf_float128 a) {
     return f128_rad_to_deg(f128_atan_dw(a));
 }
 
+lf_float128 lf_f128_atan2d(lf_float128 y, lf_float128 x) {
+    if (f128_is_nan(x) || f128_is_nan(y)) return f128_make_nan();
+    f128_dw r = f128_atan2_dw(y, x);
+    if (f128_is_zero(r.hi)) return r.hi;
+    return f128_rad_to_deg(r);
+}
+
+/* atan2(y, x)/pi (Fortran 2023 atan2pi) */
+lf_float128 lf_f128_atan2pi(lf_float128 y, lf_float128 x) {
+    if (f128_is_nan(x) || f128_is_nan(y)) return f128_make_nan();
+    f128_dw r = f128_atan2_dw(y, x);
+    if (f128_is_zero(r.hi)) return r.hi;
+    return dw_div(r, f128_pi_dw()).hi;
+}
+
+/* |a| = n/2 + r with r in [-1/4, 1/4] exactly, for finite a; returns
+ * n mod 4. */
+static int f128_rem_half(lf_float128 a, lf_float128 *r) {
+    f128_parts p = f128_unpack(a);
+    lf_float128 ax = lf_f128_abs(a);
+    /* 2^113 and above are even integers */
+    if (p.is_zero || p.exp >= 113) { *r = f128_make_zero(0); return 0; }
+    /* ax mod 2, exact */
+    ax = f_sub(ax, f128_scale(lf_f128_floor(f128_scale(ax, -1)), 1));
+    /* 2*ax rounded to nearest, exactly: 2*ax + 1/2 would round, e.g. to a
+     * tie for ax just below 1/4. */
+    lf_float128 t = f128_scale(ax, 1);
+    lf_float128 q = lf_f128_floor(t);
+    if (f128_cmp_internal(f_sub(t, q), f128_half()) >= 0) {
+        q = f_add(q, f128_one());
+    }
+    int64_t n = __fixtfdi_lf_impl(q);
+    *r = f_sub(ax, f128_scale(f_int(n), -1));   /* exact */
+    return (int)(n & 3);
+}
+
+/* r * pi as a double-word */
+static f128_dw f128_halfrev_to_rad(lf_float128 r) {
+    return dw_mul_q(f128_pi_dw(), r);
+}
+
+lf_float128 lf_f128_sinpi(lf_float128 a) {
+    f128_parts p = f128_unpack(a);
+    if (p.is_nan || p.is_inf) return f128_make_nan();
+    if (p.is_zero) return a;
+    lf_float128 rh;
+    int n = f128_rem_half(a, &rh);
+    /* sin(pi*k) is exactly 0, with the sign of a (IEEE 754 sinPi). */
+    if (!(n & 1) && f128_is_zero(rh)) return f128_make_zero(p.sign);
+    f128_dw r = f128_halfrev_to_rad(rh);
+    lf_float128 s;
+    switch (n) {
+        case 0:  s = f128_sin_dw(r).hi; break;
+        case 1:  s = f128_cos_dw(r).hi; break;
+        case 2:  s = f_neg(f128_sin_dw(r).hi); break;
+        default: s = f_neg(f128_cos_dw(r).hi); break;
+    }
+    return f_sign(s, p.sign);
+}
+
+lf_float128 lf_f128_cospi(lf_float128 a) {
+    f128_parts p = f128_unpack(a);
+    if (p.is_nan || p.is_inf) return f128_make_nan();
+    lf_float128 rh;
+    int n = f128_rem_half(a, &rh);
+    /* cos(pi*(k + 1/2)) is exactly +0 (IEEE 754 cosPi). */
+    if ((n & 1) && f128_is_zero(rh)) return f128_make_zero(0);
+    f128_dw r = f128_halfrev_to_rad(rh);
+    switch (n) {
+        case 0:  return f128_cos_dw(r).hi;
+        case 1:  return f_neg(f128_sin_dw(r).hi);
+        case 2:  return f_neg(f128_cos_dw(r).hi);
+        default: return f128_sin_dw(r).hi;
+    }
+}
+
+lf_float128 lf_f128_tanpi(lf_float128 a) {
+    f128_parts p = f128_unpack(a);
+    if (p.is_nan || p.is_inf) return f128_make_nan();
+    if (p.is_zero) return a;
+    lf_float128 rh;
+    int n = f128_rem_half(a, &rh);
+    if (f128_is_zero(rh)) {
+        /* tan(pi*k) is +0 for even k and -0 for odd k, times the sign of
+         * a; tan(pi*(k + 1/2)) is +inf for even k and -inf for odd k
+         * (IEEE 754 tanPi). */
+        if (n & 1) return f128_make_inf(p.sign ^ (n == 3));
+        return f128_make_zero(p.sign ^ (n == 2));
+    }
+    /* tan(pi*(k/2 + 1/4)) is exactly +-1. */
+    if (f128_cmp_internal(lf_f128_abs(rh), f128_scale(f128_half(), -1)) == 0) {
+        return f_sign(f128_one(), p.sign ^ f128_unpack(rh).sign ^ (n & 1));
+    }
+    return f_sign(f128_tan_reduced(n, f128_halfrev_to_rad(rh)), p.sign);
+}
+
+/* r / pi */
+static lf_float128 f128_rad_to_halfrev(f128_dw r) {
+    return dw_div(r, f128_pi_dw()).hi;
+}
+
+lf_float128 lf_f128_asinpi(lf_float128 a) {
+    f128_parts p = f128_unpack(a);
+    if (p.is_nan || p.is_zero) return a;
+    if (f128_cmp_internal(lf_f128_abs(a), f128_one()) > 0) return f128_make_nan();
+    return f128_rad_to_halfrev(f128_asin_dw(a));
+}
+
+lf_float128 lf_f128_acospi(lf_float128 a) {
+    f128_parts p = f128_unpack(a);
+    if (p.is_nan) return a;
+    if (f128_cmp_internal(lf_f128_abs(a), f128_one()) > 0) return f128_make_nan();
+    return f128_rad_to_halfrev(f128_acos_dw(a));
+}
+
+lf_float128 lf_f128_atanpi(lf_float128 a) {
+    f128_parts p = f128_unpack(a);
+    if (p.is_nan || p.is_zero) return a;
+    return f128_rad_to_halfrev(f128_atan_dw(a));
+}
+
 /* ========================================================================
  * M. Math: sinh, cosh, tanh, asinh, acosh, atanh
  * ======================================================================== */
@@ -2097,25 +2371,20 @@ lf_float128 lf_f128_sinh(lf_float128 a) {
     f128_parts p = f128_unpack(a);
     if (p.is_nan || p.is_inf || p.is_zero) return a;
     if (p.exp < -57) return a;              /* sinh(x) = x */
-    lf_float128 ax = lf_f128_abs(a), one = f128_one(), r;
+    lf_float128 ax = lf_f128_abs(a), zero = f128_make_zero(0), r;
     double d = f_dbl(ax);
-    if (d < 40.0) {
-        /* t = expm1(|x|): sinh = (2t - t^2/(t+1))/2 for |x| < 1,
-         * (t + t/(t+1))/2 otherwise */
-        lf_float128 t = lf_f128_expm1(ax);
-        lf_float128 tp1 = f_add(t, one);
-        if (d < 1.0) {
-            r = f_sub(f128_scale(t, 1), f_div(f_mul(t, t), tp1));
-        } else {
-            r = f_add(t, f_div(t, tp1));
-        }
-        r = f128_scale(r, -1);
+    if (d < 50.0) {
+        /* t = expm1(|x|): sinh = (t + t/(t+1))/2 */
+        f128_dw t = f128_expm1_dw(ax);
+        f128_dw tp1 = dw_add(t, dw_make(f128_one(), zero));
+        r = f128_scale(dw_add(t, dw_div(t, tp1)).hi, -1);
     } else if (d > 11358.0) {
         r = f128_make_inf(0);
     } else {
+        /* exp(-2|x|) < 2^-144 */
         int32_t n;
-        lf_float128 q = f128_exp_core(ax, f128_make_zero(0), &n);
-        r = f128_scale(f_add(one, q), n - 1);
+        f128_dw m = f128_exp_core(dw_make(ax, zero), &n);
+        r = f128_scale(m.hi, n - 1);
     }
     return f_sign(r, p.sign);
 }
@@ -2124,43 +2393,34 @@ lf_float128 lf_f128_cosh(lf_float128 a) {
     f128_parts p = f128_unpack(a);
     if (p.is_nan) return a;
     if (p.is_inf) return f128_make_inf(0);
-    lf_float128 ax = lf_f128_abs(a), one = f128_one();
+    lf_float128 ax = lf_f128_abs(a), one = f128_one(), zero = f128_make_zero(0);
     if (p.is_zero || p.exp < -57) return one;
     double d = f_dbl(ax);
-    if (d < 0.3465) {
-        /* t = expm1(|x|): cosh = 1 + t^2/(2(1+t)) */
-        lf_float128 t = lf_f128_expm1(ax);
-        lf_float128 w = f128_scale(f_add(one, t), 1);
-        return f_add(one, f_div(f_mul(t, t), w));
-    }
-    if (d < 40.0) {
-        lf_float128 t = lf_f128_exp(ax);
-        return f_add(f128_scale(t, -1), f_div(f128_half(), t));
-    }
     if (d > 11358.0) return f128_make_inf(0);
     int32_t n;
-    lf_float128 q = f128_exp_core(ax, f128_make_zero(0), &n);
-    return f128_scale(f_add(one, q), n - 1);
+    f128_dw m = f128_exp_core(dw_make(ax, zero), &n);
+    /* exp(-2|x|) < 2^-144 */
+    if (d >= 50.0) return f128_scale(m.hi, n - 1);
+    /* (exp(|x|) + exp(-|x|))/2 */
+    f128_dw e = dw_scale(m, n);
+    f128_dw r = dw_add(e, dw_div(dw_make(one, zero), e));
+    return f128_scale(r.hi, -1);
 }
 
 lf_float128 lf_f128_tanh(lf_float128 a) {
     f128_parts p = f128_unpack(a);
-    lf_float128 one = f128_one(), two = f128_two(), r;
+    lf_float128 one = f128_one(), r;
     if (p.is_nan || p.is_zero) return a;
     if (p.is_inf) return f_sign(one, p.sign);
     if (p.exp < -57) return a;              /* tanh(x) = x */
     lf_float128 ax = lf_f128_abs(a);
-    double d = f_dbl(ax);
-    if (d > 40.0) {
+    if (f_dbl(ax) > 40.0) {
+        /* 1 - tanh(x) < 2^-114 */
         r = one;
-    } else if (d >= 1.0) {
-        /* 1 - 2/(expm1(2|x|) + 2) */
-        lf_float128 t = lf_f128_expm1(f128_scale(ax, 1));
-        r = f_sub(one, f_div(two, f_add(t, two)));
     } else {
-        /* -t/(t + 2), t = expm1(-2|x|) */
-        lf_float128 t = lf_f128_expm1(f_neg(f128_scale(ax, 1)));
-        r = f_neg(f_div(t, f_add(t, two)));
+        /* t/(t + 2), t = expm1(2|x|) */
+        f128_dw t = f128_expm1_dw(f128_scale(ax, 1));
+        r = dw_div(t, dw_add(t, dw_make(f128_two(), f128_make_zero(0)))).hi;
     }
     return f_sign(r, p.sign);
 }
@@ -2169,68 +2429,67 @@ lf_float128 lf_f128_asinh(lf_float128 a) {
     f128_parts p = f128_unpack(a);
     if (p.is_nan || p.is_inf || p.is_zero) return a;
     if (p.exp < -57) return a;              /* asinh(x) = x */
-    lf_float128 ax = lf_f128_abs(a), one = f128_one(), r;
-    if (p.exp > 57) {
-        /* log(2|x|) */
-        f128_dw l = dw_add(f128_log_dw(ax),
-                           dw_from_bits(F128_LN2));
-        r = l.hi;
-    } else if (f_dbl(ax) > 2.0) {
-        /* log(2|x| + 1/(sqrt(x^2 + 1) + |x|)) */
-        lf_float128 s = lf_f128_sqrt(f_add(f_mul(ax, ax), one));
-        r = lf_f128_log(f_add(f128_scale(ax, 1), f_div(one, f_add(s, ax))));
+    lf_float128 ax = lf_f128_abs(a), zero = f128_make_zero(0);
+    f128_dw one = dw_make(f128_one(), zero), r;
+    if (p.exp > 66) {
+        /* log(2|x|), the next term 1/(4x^2) is below 2^-136 */
+        r = dw_add(f128_log_dw(ax), dw_from_bits(F128_LN2));
     } else {
-        /* log1p(|x| + x^2/(1 + sqrt(1 + x^2))) */
-        lf_float128 t = f_mul(ax, ax);
-        lf_float128 s = lf_f128_sqrt(f_add(one, t));
-        r = f128_log1p(f_add(ax, f_div(t, f_add(one, s))));
+        f128_dw x2 = two_prod(ax, ax);
+        f128_dw s = dw_sqrt(dw_add(x2, one));
+        if (f_dbl(ax) > 2.0) {
+            /* log(2|x| + 1/(sqrt(x^2 + 1) + |x|)) */
+            f128_dw q = dw_div(one, dw_add(s, dw_make(ax, zero)));
+            r = f128_log_dw2(dw_add(dw_make(f128_scale(ax, 1), zero), q));
+        } else {
+            /* log1p(|x| + x^2/(1 + sqrt(1 + x^2))) */
+            f128_dw q = dw_div(x2, dw_add(one, s));
+            r = f128_log1p_dw(dw_add(dw_make(ax, zero), q));
+        }
     }
-    return f_sign(r, p.sign);
+    return f_sign(r.hi, p.sign);
 }
 
 lf_float128 lf_f128_acosh(lf_float128 a) {
     f128_parts p = f128_unpack(a);
-    lf_float128 one = f128_one();
+    lf_float128 zero = f128_make_zero(0);
+    f128_dw one = dw_make(f128_one(), zero);
     if (p.is_nan) return a;
-    int c = f128_cmp_internal(a, one);
+    int c = f128_cmp_internal(a, one.hi);
     if (c < 0) return f128_make_nan();
-    if (c == 0) return f128_make_zero(0);
+    if (c == 0) return zero;
     if (p.is_inf) return a;
-    if (p.exp > 57) {
-        /* log(2x) */
-        return dw_add(f128_log_dw(a),
-                      dw_from_bits(F128_LN2)).hi;
+    if (p.exp > 66) {
+        /* log(2x), the next term -1/(4x^2) is below 2^-136 */
+        return dw_add(f128_log_dw(a), dw_from_bits(F128_LN2)).hi;
     }
     if (f_dbl(a) > 2.0) {
         /* log(2x - 1/(x + sqrt(x^2 - 1))) */
-        lf_float128 s = lf_f128_sqrt(f_sub(f_mul(a, a), one));
-        return lf_f128_log(f_sub(f128_scale(a, 1), f_div(one, f_add(a, s))));
+        f128_dw s = dw_sqrt(dw_add(two_prod(a, a), dw_neg(one)));
+        f128_dw q = dw_div(one, dw_add(s, dw_make(a, zero)));
+        return f128_log_dw2(dw_add(dw_make(f128_scale(a, 1), zero),
+                                   dw_neg(q))).hi;
     }
     /* log1p(t + sqrt(2t + t^2)), t = x - 1 (exact) */
-    lf_float128 t = f_sub(a, one);
-    lf_float128 s = lf_f128_sqrt(f_add(f128_scale(t, 1), f_mul(t, t)));
-    return f128_log1p(f_add(t, s));
+    lf_float128 t = f_sub(a, one.hi);
+    f128_dw s = dw_sqrt(dw_add(two_prod(t, t),
+                               dw_make(f128_scale(t, 1), zero)));
+    return f128_log1p_dw(dw_add(dw_make(t, zero), s)).hi;
 }
 
 lf_float128 lf_f128_atanh(lf_float128 a) {
     f128_parts p = f128_unpack(a);
-    lf_float128 one = f128_one(), r;
+    lf_float128 one = f128_one();
     if (p.is_nan || p.is_zero) return a;
     lf_float128 ax = lf_f128_abs(a);
     int c = f128_cmp_internal(ax, one);
     if (c > 0) return f128_make_nan();
     if (c == 0) return f128_make_inf(p.sign);
     if (p.exp < -57) return a;              /* atanh(x) = x */
-    lf_float128 t = f128_scale(ax, 1);
-    lf_float128 d = f_sub(one, ax);
-    if (f128_cmp_internal(ax, f128_half()) < 0) {
-        /* log1p(2|x| + 2|x|*|x|/(1 - |x|))/2 */
-        r = f128_log1p(f_add(t, f_div(f_mul(t, ax), d)));
-    } else {
-        /* log1p(2|x|/(1 - |x|))/2, 1 - |x| is exact */
-        r = f128_log1p(f_div(t, d));
-    }
-    return f_sign(f128_scale(r, -1), p.sign);
+    /* log1p(2|x|/(1 - |x|))/2 */
+    f128_dw q = dw_div(dw_make(f128_scale(ax, 1), f128_make_zero(0)),
+                       two_sum(one, f_neg(ax)));
+    return f_sign(f128_scale(f128_log1p_dw(q).hi, -1), p.sign);
 }
 
 /* ========================================================================
@@ -2244,29 +2503,54 @@ lf_float128 lf_f128_atanh(lf_float128 a) {
  * evaluated from the bottom, which converges quickly there.
  * ======================================================================== */
 
-static lf_float128 f128_erf_series(lf_float128 a) {
-    lf_float128 a2 = f_mul(a, a);
-    lf_float128 two_a2 = f128_scale(a2, 1);
-    lf_float128 term = a;
-    lf_float128 sum = a;
-    lf_float128 eps = lf_float128_from_str("1e-36");
-    for (int n = 1; n < 400; n++) {
-        term = f_div(f_mul(term, two_a2), lf_f128_from_int64(2 * (int64_t)n + 1));
-        sum = f_add(sum, term);
-        if (f128_cmp_internal(term, f_mul(sum, eps)) < 0) break;
+/* erf(a) for 0 <= a < 2, as a double-word. The terms are summed in
+ * double-word until they drop below 2^-30 of the sum, then in single word. */
+static f128_dw f128_erf_series_dw(lf_float128 a) {
+    lf_float128 zero = f128_make_zero(0);
+    f128_dw a2 = two_prod(a, a);
+    f128_dw x = dw_scale(a2, 1);
+    f128_dw term = dw_make(a, zero), sum = term;
+    int n = 1;
+    for (; n < 400; n++) {
+        term = dw_div(dw_mul(term, x), dw_make(f_int(2 * n + 1), zero));
+        sum = dw_add(sum, term);
+        if (f128_cmp_internal(term.hi, f128_scale(sum.hi, -30)) < 0) break;
     }
-    lf_float128 two_over_sqrt_pi = lf_float128_from_str("1.12837916709551257389615890312154517");
-    return f_mul(f_mul(two_over_sqrt_pi, lf_f128_exp(f_neg(a2))), sum);
+    lf_float128 t = term.hi, tail = zero;
+    for (n++; n < 400; n++) {
+        t = f_div(f_mul(t, x.hi), f_int(2 * n + 1));
+        tail = f_add(tail, t);
+        if (f128_cmp_internal(t, f128_scale(sum.hi, -120)) < 0) break;
+    }
+    sum = dw_add(sum, dw_make(tail, zero));
+    int32_t e;
+    f128_dw m = f128_exp_core(dw_neg(a2), &e);
+    return dw_scale(dw_mul(dw_mul(dw_from_bits(F128_TWO_OVER_SQRT_PI), m),
+                           sum), e);
 }
 
-static lf_float128 f128_erfc_fraction(lf_float128 a) {
+/* erfc(a) for 2 <= a <= 110, as a double-word. The continued fraction is
+ * truncated after 40 + 1600/a^2 levels (at most 400), which leaves a
+ * relative error below 2^-150; its last 24 levels are double-word. */
+static f128_dw f128_erfc_fraction_dw(lf_float128 a) {
+    lf_float128 zero = f128_make_zero(0);
     lf_float128 t = a;
-    for (int k = 400; k >= 1; k--) {
-        lf_float128 c = f128_scale(lf_f128_from_int64(k), -1);
-        t = f_add(a, f_div(c, t));
+    double d = f_dbl(a);
+    int levels = 40 + (int)(1600.0 / (d * d));
+    if (levels > 400) levels = 400;
+    for (int k = levels; k > 24; k--) {
+        t = f_add(a, f_div(f128_scale(f_int(k), -1), t));
     }
-    lf_float128 sqrt_pi = lf_float128_from_str("1.77245385090551602729816748334114518");
-    return f_div(lf_f128_exp(f_neg(f_mul(a, a))), f_mul(sqrt_pi, t));
+    f128_dw td = dw_make(t, zero);
+    for (int k = 24; k >= 1; k--) {
+        f128_dw c = dw_make(f128_scale(f_int(k), -1), zero);
+        td = dw_add(dw_make(a, zero), dw_div(c, td));
+    }
+    int32_t e;
+    f128_dw m = f128_exp_core(dw_neg(two_prod(a, a)), &e);
+    /* 1/sqrt(pi) */
+    f128_dw c = dw_scale(dw_from_bits(F128_TWO_OVER_SQRT_PI), -1);
+    return dw_scale(dw_div(dw_mul(c, m), td), e);
 }
 
 lf_float128 lf_f128_erf(lf_float128 a) {
@@ -2275,94 +2559,73 @@ lf_float128 lf_f128_erf(lf_float128 a) {
     if (p.is_nan || p.is_zero) return a;
     lf_float128 ax = lf_f128_abs(a);
     lf_float128 r;
-    if (f128_cmp_internal(ax, lf_f128_from_int64(2)) < 0) {
-        r = f128_erf_series(ax);
-    } else if (f128_cmp_internal(ax, lf_f128_from_int64(7)) > 0) {
+    if (p.exp < -57) {
+        /* 2x/sqrt(pi) (1 - x^2/3 + ...); x^4/10 < 2^-228. x is scaled
+         * by 2^128 so that the low word does not underflow. */
+        f128_dw k = dw_from_bits(F128_TWO_OVER_SQRT_PI);
+        f128_dw c = dw_mul_q(k, f128_scale(ax, 128));
+        lf_float128 d = f_div(f_mul(c.hi, f_mul(ax, ax)), f_int(3));
+        r = f_add(c.hi, f_sub(c.lo, d));
+        if (f128_unpack(r).exp >= -16382 + 128) {
+            r = f128_scale(r, -128);
+        } else {
+            /* subnormal result: round the unscaled product only once */
+            r = dw_mul_q(k, ax).hi;
+        }
+    } else if (f128_cmp_internal(ax, f_int(2)) < 0) {
+        r = f128_erf_series_dw(ax).hi;
+    } else if (f128_cmp_internal(ax, f_int(9)) > 0) {
+        /* erfc(9) < 2^-120 */
         r = one;
     } else {
-        r = f_sub(one, f128_erfc_fraction(ax));
+        r = dw_add(dw_make(one, f128_make_zero(0)),
+                   dw_neg(f128_erfc_fraction_dw(ax))).hi;
     }
     return f_sign(r, p.sign);
 }
 
 lf_float128 lf_f128_erfc(lf_float128 a) {
     f128_parts p = f128_unpack(a);
-    lf_float128 one = f128_one();
+    lf_float128 zero = f128_make_zero(0);
     if (p.is_nan) return a;
+    if (p.is_zero) return f128_one();
     lf_float128 ax = lf_f128_abs(a);
-    lf_float128 r;
-    if (p.is_zero) {
-        return one;
-    } else if (f128_cmp_internal(ax, lf_f128_from_int64(2)) < 0) {
-        r = f_sub(one, f128_erf_series(ax));
-    } else if (f128_cmp_internal(ax, lf_f128_from_int64(110)) > 0) {
-        r = lf_f128_from_int64(0);
+    f128_dw r;
+    if (f128_cmp_internal(ax, f_int(2)) < 0) {
+        /* 1 - erf(x) */
+        r = f128_erf_series_dw(ax);
+        return dw_add(dw_make(f128_one(), zero), p.sign ? r : dw_neg(r)).hi;
+    }
+    if (f128_cmp_internal(ax, f_int(110)) > 0) {
+        r = dw_make(zero, zero);
     } else {
-        r = f128_erfc_fraction(ax);
+        r = f128_erfc_fraction_dw(ax);
     }
-    if (p.sign) {
-        r = f_sub(lf_f128_from_int64(2), r);
-    }
-    return r;
+    /* erfc(-x) = 2 - erfc(x) */
+    if (p.sign) return dw_add(dw_make(f128_two(), zero), dw_neg(r)).hi;
+    return r.hi;
 }
 
 /* ========================================================================
  * Gamma, log-gamma, hypot, Bessel J0/J1/Jn/Y0, erfc_scaled.
  *
- * log Γ(z) for z >= 40 is the Stirling series. Smaller positive arguments
- * are shifted up by the recurrence. The coefficients are B2..B32.
+ * log Γ(x) is computed as a double-word, so that log_gamma and
+ * gamma = exp(log Γ) are within about an ulp also where log Γ is small:
+ *  - x > 0: log Γ(x) = S(z) - log(x (x+1) ... (x+n-1)), with the Stirling
+ *    series S at z = x + n >= 40 and the product in double-word;
+ *  - |x - 1| or |x - 2| < 1/256, near the zeros of log Γ: the Taylor
+ *    series of log Γ(1 + e) and log Γ(2 + e);
+ *  - x < 0: the reflection formula Γ(x) = π / (sin(πx) Γ(1 - x)), with
+ *    sin(πx) reduced exactly.
  * A positive integer whose factorial is an exact binary128 value uses that
- * product instead: shifting a small integer cancels and is not (n-1)!.
+ * product instead.
  * ======================================================================== */
-
-static const char *const f128_bernoulli_even[] = {
-    "0.1666666666666666666666666666666666666667",          /* B2  */
-    "-0.03333333333333333333333333333333333333333",        /* B4  */
-    "0.02380952380952380952380952380952380952381",         /* B6  */
-    "-0.03333333333333333333333333333333333333333",        /* B8  */
-    "0.07575757575757575757575757575757575757576",         /* B10 */
-    "-0.2531135531135531135531135531135531135531",         /* B12 */
-    "1.166666666666666666666666666666666666667",           /* B14 */
-    "-7.092156862745098039215686274509803921569",          /* B16 */
-    "54.97117794486215538847117794486215538847",           /* B18 */
-    "-529.1242424242424242424242424242424242424",          /* B20 */
-    "6192.123188405797101449275362318840579710",           /* B22 */
-    "-86580.25311355311355311355311355311355311",          /* B24 */
-    "1425517.166666666666666666666666666666667",           /* B26 */
-    "-27298231.06781609195402298850574712643678",          /* B28 */
-    "601580873.9006423683843038681748359167714",           /* B30 */
-    "-15116315767.09215686274509803921568627451"           /* B32 */
-};
 
 static int f128_is_nonpos_int(lf_float128 x) {
     f128_parts p = f128_unpack(x);
     if (p.is_nan || p.is_inf) return 0;
     if (f128_cmp_internal(x, f128_make_zero(0)) > 0) return 0;
     return f128_cmp_internal(x, lf_f128_floor(x)) == 0;
-}
-
-/* ln Γ(z) for z >= 40. Truncation after B32 is < 1e-40 there. */
-static lf_float128 f128_stirling_log_gamma(lf_float128 z) {
-    lf_float128 twopi = lf_float128_from_str(
-        "6.283185307179586476925286766559005768");
-    lf_float128 half = f128_half();
-    lf_float128 lg = f_sub(f_mul(f_sub(z, half), lf_f128_log(z)), z);
-    lg = f_add(lg, f_mul(half, lf_f128_log(twopi)));
-    lf_float128 z2 = f_mul(z, z);
-    lf_float128 zpow = z;
-    int nterms = (int)(sizeof(f128_bernoulli_even) / sizeof(f128_bernoulli_even[0]));
-    for (int k = 1; k <= nterms; k++) {
-        lf_float128 B = lf_float128_from_str(f128_bernoulli_even[k - 1]);
-        lf_float128 denom = f_mul(f_mul(f_int(2 * (int64_t)k),
-            f_int(2 * (int64_t)k - 1)), zpow);
-        lf_float128 term = f_div(B, denom);
-        lg = f_add(lg, term);
-        if (f128_cmp_internal(lf_f128_abs(term),
-                lf_float128_from_str("1e-40")) < 0) break;
-        if (f128_cmp_internal(z, lf_float128_from_str("1e100")) > 0) break;
-        zpow = f_mul(zpow, z2);
-    }
-    return lg;
 }
 
 /* 1 and n_out set when x is a positive integer. Values above 1e6 are
@@ -2395,64 +2658,366 @@ static int f128_factorial_exact(int64_t n, lf_float128 *out) {
     return 1;
 }
 
-/* ln Γ(x) for x > 0, shifted into the Stirling range. */
-static lf_float128 f128_log_gamma_pos(lf_float128 x) {
+/* log Γ(z) for 40 <= z < 2^200 (Stirling series; truncating it after
+ * B32 leaves an error below 2^-140). */
+static f128_dw f128_stirling_dw(f128_dw z) {
+    lf_float128 zero = f128_make_zero(0);
+    f128_dw zh = dw_add(z, dw_make(f_neg(f128_half()), zero));
+    f128_dw r = dw_add(dw_mul(zh, f128_log_dw2(z)), dw_neg(z));
+    r = dw_add(r, dw_from_bits(F128_HALF_LN_2PI));
+    /* 1/(12 z) + sum_{k>=2} B_2k / (2k (2k-1) z^(2k-1)) */
+    r = dw_add(r, dw_div(dw_make(f128_one(), zero),
+                         dw_mul_q(z, f_int(12))));
+    lf_float128 w = f_div(f128_one(), f_mul(z.hi, z.hi));
+    lf_float128 t = f_mul(w, f128_poly(w, F128_STIRLING, 0, 14, 1));
+    return dw_add(r, dw_make(f_div(t, z.hi), zero));
+}
+
+/* log Γ(x) for x > 0, x.hi >= 7.5e-37, as a double-word. */
+static f128_dw f128_log_gamma_dw(f128_dw x) {
+    lf_float128 zero = f128_make_zero(0);
+    f128_dw one = dw_make(f128_one(), zero);
+    double xd = f_dbl(x.hi);
+    if (xd >= 1e60) {
+        /* x (log x - 1); the other terms are below 2^-190 relative.
+         * x is scaled for two_prod. */
+        f128_dw t = dw_add(f128_log_dw(x.hi), dw_neg(one));
+        t = dw_mul_q(t, f128_scale(x.hi, -400));
+        return dw_make(f128_scale(t.hi, 400), zero);
+    }
+    if (fabs(xd - 1.0) < 1.0 / 256 || fabs(xd - 2.0) < 1.0 / 256) {
+        /* log Γ(1 + e) = -γ e + sum_{k>=2} (-1)^k ζ(k)/k e^k,
+         * log Γ(2 + e) = (1 - γ) e + sum_{k>=2} (-1)^k (ζ(k) - 1)/k e^k */
+        int two = xd > 1.5;
+        f128_dw e = dw_add(x, dw_make(f_int(two ? -2 : -1), zero));
+        f128_dw c1 = dw_neg(dw_from_bits(F128_EULER));
+        if (two) c1 = dw_add(c1, one);
+        lf_float128 t = f128_poly(e.hi,
+            two ? F128_LGAMMA2_TAYLOR : F128_LGAMMA1_TAYLOR, 0, 14, 1);
+        t = f_mul(f_mul(e.hi, e.hi), t);
+        return dw_add(dw_mul(c1, e), dw_make(t, zero));
+    }
+    if (xd >= 40.0) return f128_stirling_dw(x);
+    f128_dw z = x, p = one;
+    while (f_dbl(z.hi) < 40.0) {
+        p = dw_mul(p, z);
+        z = dw_add(z, one);
+    }
+    return dw_add(f128_stirling_dw(z), dw_neg(f128_log_dw2(p)));
+}
+
+/* sin(πr) for 0 < r <= 1/2, as a double-word. */
+static f128_dw f128_sinpi_dw(lf_float128 r) {
+    int use_cos = f128_cmp_internal(r, f128_scale(f128_one(), -2)) > 0;
+    if (use_cos) r = f_sub(f128_half(), r);   /* exact */
+    f128_dw t = dw_mul_q(dw_from_bits(F128_PI), r);
+    return use_cos ? f128_cos_dw(t) : f128_sin_dw(t);
+}
+
+/* log(1 + a) for |a| < 1/2, as a double-word. f128_log1p_dw rounds 1 + a,
+ * which leaves an error of about a^2/2 (absolute, not relative to a), so
+ * tiny a uses the series. */
+static f128_dw f128_log1p_small_dw(f128_dw a) {
+    if (fabs(f_dbl(a.hi)) >= 1e-12) return f128_log1p_dw(a);
+    /* a - a^2/2 + a^3/3 - a^4/4; a^5/5 < 2^-150 a */
+    f128_dw a2 = dw_mul(a, a);
+    lf_float128 t = f_mul(a2.hi, f_sub(f_div(a.hi, f_int(3)),
+                                       f128_scale(a2.hi, -2)));
+    return dw_add(a, dw_add(dw_neg(dw_scale(a2, -1)),
+                            dw_make(t, f128_make_zero(0))));
+}
+
+/* The zeros x0 of log|Γ(x)| on the negative axis, in decreasing order: in
+ * each interval (-k-1, -k), k = 2..29, the zero near -k and then the one
+ * near -k-1 (about 1/k! and 1/(k+1)! from the integer). Each x0 is given as
+ * three binary128 words w0 = RN(x0), w1 = RN(x0 - w0), w2 = RN(x0 - w0 - w1)
+ * (round to nearest even), each as {high, low} 64-bit halves of its bit
+ * pattern, so that w0 + w1 + w2 is within 2^-340 of x0 relatively. They
+ * were computed with mpmath at 600 bits by Newton's method on
+ * t -> log|Γ(m + t)| (derivative ψ), m the nearest integer, starting from
+ * t = -1/k! and t = 1/(k+1)! (from -2.4570247382208 and -2.7476826467274
+ * for k = 2) until |dt| < 2^-580 |t|. The zero near -30 (1.2 ulp from it)
+ * and those beyond, fewer than 8 ulp from the integer, are left out: the
+ * binary128 numbers next to them have |log|Γ(x)|| >= 0.2, where the
+ * reflection formula is accurate. gen_float128_consts.py does not print
+ * this table. */
+static const uint64_t F128_LGAMMA_NEG_ZEROS[55][3][2] = {
+    {{0xC0003A7FC9600F86ULL, 0xC155F64F98AF8D04ULL},
+     {0x3F8EDA7996FF64CBULL, 0x0C694573ED657502ULL}, {0xBF1CDABEFEE80324ULL, 0x9432507A9A308567ULL}},
+    {{0xC0005FB410A1BD90ULL, 0x0CBCCAD25A320F57ULL},
+     {0xBF8E7E960169053FULL, 0x2C3C850A67CD5A09ULL}, {0xBF1CA19091CA6DAAULL, 0xD3315682EFEC8147ULL}},
+    {{0xC0009260DBC9E59AULL, 0xF7DC5F34CD69ECDDULL},
+     {0xBF8D951532DFEB18ULL, 0x38FC5B675E1030B8ULL}, {0x3F1A1143E19EFE21ULL, 0x874C52E1B6E311A0ULL}},
+    {{0xC000FA471547C2FEULL, 0x50B86A2B094891B6ULL},
+     {0xBF8E86414910FA39ULL, 0x698E230514EBAAEBULL}, {0xBF1AE43A3EE3C43BULL, 0xA397E9CF393137DEULL}},
+    {{0xC0010284E7859958ULL, 0x0C30E7C2C3786045ULL},
+     {0x3F8F53E84029416EULL, 0x1242006B2B3D1CF0ULL}, {0x3F1C5F0FD648CC70ULL, 0x38652CD97CEC886EULL}},
+    {{0xC0013F7577A6EEAFULL, 0xCD44342A901DA621ULL},
+     {0xBF8F01D7D7812528ULL, 0x6F78D1E501F14966ULL}, {0xBF1DE510C2CB930EULL, 0xA8FFE507CD160F2BULL}},
+    {{0xC0014086A57F0B6DULL, 0x90CA9315B9654E53ULL},
+     {0xBF8FECC6AF0430D4ULL, 0xFE5746FA7233356FULL}, {0xBF1B64C22D23EB5DULL, 0xDC7E145CB6D07187ULL}},
+    {{0xC0017FE92F591F40ULL, 0xD5F753B58B2F4C7BULL},
+     {0xBF8FF8E3F8E5DEBAULL, 0x2D67DBD70DD96CE1ULL}, {0x3F1B6800D68D45B4ULL, 0x64F6F6E6E3CFB00FULL}},
+    {{0xC0018016B25897C8ULL, 0xCED81F0B65B458E1ULL},
+     {0xBF8FCB86AC569340ULL, 0xCF1E5F24DF7AAB7BULL}, {0x3F1A5DEABB49E4AAULL, 0xE36CCAC224153FAFULL}},
+    {{0xC001BFFCBF76B86EULL, 0xFFCF589AD9708FF5ULL},
+     {0x3F8FE0BFCFF5C457ULL, 0xEBCF4D3AD9674167ULL}, {0xBF1B047C36197D46ULL, 0xB5A898E718F6AD45ULL}},
+    {{0xC001C0033FDEDFE1ULL, 0xEB7D120B736E61E1ULL},
+     {0x3F8F54D99E35A74DULL, 0x6407B80292DF199FULL}, {0x3F1D0AA41AA7E718ULL, 0xC7E8EDA9ECCCDB1FULL}},
+    {{0xC001FFFF97F8159CULL, 0xF0F2A7A0AD48AC33ULL},
+     {0x3F8F62D177C832E0ULL, 0xEB42C2FAFFD1B145ULL}, {0x3F1DFAE23D4661B2ULL, 0x738F59F0562E3DD0ULL}},
+    {{0xC002000034028B3FULL, 0x93EC19679D839D91ULL},
+     {0x3F9044CC41AD6393ULL, 0xBFBDE77B3E23F8C4ULL}, {0xBF1D68D43841E790ULL, 0x4556235F558E7276ULL}},
+    {{0xC0021FFFFA3884BDULL, 0x01FF90C9D2AE924BULL},
+     {0xBF8FE7E20210E7F8ULL, 0x1CF781B44E9D2B02ULL}, {0x3F1C7B66E971821AULL, 0x8BB57D521EB1EAD7ULL}},
+    {{0xC002200005C7768FULL, 0xB0DADB087FDB86A4ULL},
+     {0x3F900A4297B09D0BULL, 0x148BA8E955BA8FBFULL}, {0xBF1E8CCF4C71B64DULL, 0x6805B7CBA6B0E208ULL}},
+    {{0xC0023FFFFF6C0D7BULL, 0xFB9A0C55CEF4A0A9ULL},
+     {0x3F8CCB168A486617ULL, 0x47818E3803F550D0ULL}, {0xBF1ADBB826F4C09BULL, 0x2119F185DE1E90F5ULL}},
+    {{0xC00240000093F277ULL, 0x7324F68BB2BC2A88ULL},
+     {0xBF8FE03086DB9146ULL, 0xA9287BD4F2172D5AULL}, {0x3F1C87E534305724ULL, 0x83E4CCB77D4E87D0ULL}},
+    {{0xC0025FFFFFF28CDDULL, 0x3E366DB59A55B7A3ULL},
+     {0xBF8EA0B49C8B00C5ULL, 0xE7F2A68B49B3936CULL}, {0x3F1C173558CA2F4FULL, 0x9B901ED9BDC437EBULL}},
+    {{0xC0026000000D7322ULL, 0xA62BB2CB4DFFD482ULL},
+     {0x3F8FB415C6FFF233ULL, 0xE7B7FDC3A094246FULL}, {0xBF1D1771E84384AFULL, 0x2B0CC11B3083CD99ULL}},
+    {{0xC0027FFFFFFEE112ULL, 0x70E70FBC835987A8ULL},
+     {0x3F90B43A13E31B9DULL, 0xEBA5081837085147ULL}, {0x3F1EFF6041AAA13CULL, 0x2ABB9245D08C2837ULL}},
+    {{0xC002800000011EEDULL, 0x8EE62ACF81E04A1EULL},
+     {0xBF90C3C906FAB3ACULL, 0x19C2C8C87589477BULL}, {0xBF1E55F88391DB4EULL, 0x17F319A29581894EULL}},
+    {{0xC0029FFFFFFFE9EDULL, 0xB9EC2FF2F4BFF8EBULL},
+     {0x3F8C55B96BB79975ULL, 0x77168D2176A8AE9DULL}, {0xBF1AC5309A19C727ULL, 0xB478E5E19FBD93CDULL}},
+    {{0xC002A00000001612ULL, 0x461380CD07BA3720ULL},
+     {0xBF90F1B8042BD0AEULL, 0x0CD62D308EF4B445ULL}, {0xBF1E608FC88782C3ULL, 0xBA0844C0790AFFF2ULL}},
+    {{0xC002BFFFFFFFFE6CULL, 0x68B573C30947C13AULL},
+     {0xBF8F176DC48E47F6ULL, 0x2D917973DD44E553ULL}, {0x3F1D99F4E4F86558ULL, 0x385C0F38F0B4A320ULL}},
+    {{0xC002C00000000193ULL, 0x974A8BD29CEBD8AEULL},
+     {0xBF8F8F753E2501E7ULL, 0x57A17CF2ECBEEB89ULL}, {0x3F1DF7B9524F74E1ULL, 0x9BCF6DEF97BC02B5ULL}},
+    {{0xC002DFFFFFFFFFE5ULL, 0x180C18CC09DE606EULL},
+     {0xBF8FF89D37357C9EULL, 0x3DC17C6C6E63BECAULL}, {0xBF1B6DE35D34BFC8ULL, 0x0383B5BBF139FC5BULL}},
+    {{0xC002E0000000001AULL, 0xE7F3E7337A1C841FULL},
+     {0xBF8D7A7B8C6C2E24ULL, 0x1D13F038FEF00412ULL}, {0x3F1BC584EF816B83ULL, 0x1041E2AB47A5C660ULL}},
+    {{0xC002FFFFFFFFFFFEULL, 0x5180C18CC43EA25DULL},
+     {0x3F8EA365DD93B2C1ULL, 0x7B35B8B7CBEBF4A0ULL}, {0xBF1BEFD4593C2D5AULL, 0x044C4870A884D86DULL}},
+    {{0xC003000000000000ULL, 0xD73F9F399DA1424CULL},
+     {0x3F8DB11B83A20C17ULL, 0x4A003C39053141AAULL}, {0xBF1BB4AA7268112FULL, 0x745A946417998989ULL}},
+    {{0xC0030FFFFFFFFFFFULL, 0xF3569C47E7A93E1CULL},
+     {0xBF911A8228B8022AULL, 0x663AEAEE021FBE8BULL}, {0x3F1FCC2C19D69C79ULL, 0xD02377B28D0BC5A4ULL}},
+    {{0xC003100000000000ULL, 0x0CA963B818568887ULL},
+     {0xBF91B2968E993B05ULL, 0x76C2A572BCB27FEDULL}, {0x3F1E42FBEA0FCAD4ULL, 0x3F9BB71EBD2C6B01ULL}},
+    {{0xC0031FFFFFFFFFFFULL, 0xFF4BEC3CE234132DULL},
+     {0xBF8E1656E4C30F90ULL, 0x8397259AA443C888ULL}, {0x3F1C87D583DDD519ULL, 0xE6A9ECD95B301012ULL}},
+    {{0xC003200000000000ULL, 0x00B413C31DCBECA5ULL},
+     {0x3F90E268029A25B6ULL, 0x687391889014A55EULL}, {0xBF1D6B790B7DE8DAULL, 0x195BBC2624F2F797ULL}},
+    {{0xC0032FFFFFFFFFFFULL, 0xFFF685B25CBF5F54ULL},
+     {0xBF9173B64CB8E121ULL, 0x7DF74A5AE3E90512ULL}, {0x3F1FBB30733B7ADAULL, 0xB31465C3A526F272ULL}},
+    {{0xC003300000000000ULL, 0x00097A4DA340A0ACULL},
+     {0x3F91F92138383FF8ULL, 0xE3501BAFAF844BE2ULL}, {0xBF1C89B2A72535A2ULL, 0x226552EB69E5D0ABULL}},
+    {{0xC0033FFFFFFFFFFFULL, 0xFFFF86AF516FF7F7ULL},
+     {0xBF91AF59F9C8355EULL, 0x15140ADF6DD785C6ULL}, {0xBF19386E90AEDF9CULL, 0xD798A85025F9DFF4ULL}},
+    {{0xC003400000000000ULL, 0x00007950AE900809ULL},
+     {0x3F91AFB0CCDD72B0ULL, 0x0976701CC5A31764ULL}, {0x3F1DFE453CFC396BULL, 0xABDE08938E29F324ULL}},
+    {{0xC0034FFFFFFFFFFFULL, 0xFFFFFA391C4248C3ULL},
+     {0x3F91718C08AD8AD5ULL, 0x212E8D194936D81CULL}, {0xBF1D1FD7AD7EAE7DULL, 0x2B696CAAEE03FA32ULL}},
+    {{0xC003500000000000ULL, 0x000005C6E3BDB73DULL},
+     {0xBF91718BD57B54C8ULL, 0xAC9A1717A69479AAULL}, {0xBF1FD9121DE92B52ULL, 0xA1E1D001DABDADE2ULL}},
+    {{0xC0035FFFFFFFFFFFULL, 0xFFFFFFBCC71A4920ULL},
+     {0xBF8FEB5AEB96C74DULL, 0x7AD25E060528FB50ULL}, {0x3F1DF07C7E4A6A49ULL, 0x6FF0B53AB94E4870ULL}},
+    {{0xC003600000000000ULL, 0x0000004338E5B6E0ULL},
+     {0x3F8FEB5AEC04B2F2ULL, 0xEB663E4E3D8A018CULL}, {0xBF1D160171952AE0ULL, 0xF6EEA5B52C7B3F4EULL}},
+    {{0xC0036FFFFFFFFFFFULL, 0xFFFFFFFD13C97D9DULL},
+     {0xBF90C7E626846B7FULL, 0x2D52B5582183E73FULL}, {0xBF1C8EC95892670CULL, 0x36DF8A8AA39A38E7ULL}},
+    {{0xC003700000000000ULL, 0x00000002EC368263ULL},
+     {0x3F90C7E626848677ULL, 0x17AE85B4D4CE1A9EULL}, {0x3F1DFF9805F83281ULL, 0x0961AFF995475BEDULL}},
+    {{0xC0037FFFFFFFFFFFULL, 0xFFFFFFFFE0D30FE7ULL},
+     {0x3F91CBD5DF3292D3ULL, 0x232C77050006B17BULL}, {0x3F1D6D342D02CA7BULL, 0x10274385F2CA73E4ULL}},
+    {{0xC003800000000000ULL, 0x000000001F2CF019ULL},
+     {0xBF91CBD5DF3292CDULL, 0x10B8D7C0102CEE7AULL}, {0xBF1FB689C614DD1EULL, 0xB0F655197829FECFULL}},
+    {{0xC0038FFFFFFFFFFFULL, 0xFFFFFFFFFEC0C332ULL},
+     {0xBF9074D02B958DDAULL, 0xDCAF9A35496B3D30ULL}, {0xBF1ECDAAAB3A0262ULL, 0x60E55DC0770B2203ULL}},
+    {{0xC003900000000000ULL, 0x00000000013F3CCEULL},
+     {0x3F9074D02B958DDAULL, 0xE1B8EED9AB0B82D0ULL}, {0x3F1E8D250056575DULL, 0x30E890589B298D7DULL}},
+    {{0xC0039FFFFFFFFFFFULL, 0xFFFFFFFFFFF3B8BDULL},
+     {0xBF8BCAD8D32E386FULL, 0xD783E97296D63DCBULL}, {0xBF190F261EDB9A49ULL, 0x1AACF551C91B2440ULL}},
+    {{0xC003A00000000000ULL, 0x00000000000C4743ULL},
+     {0x3F8BCAD8D32E386FULL, 0xD7C1AB8C1FE34C0EULL}, {0x3F198800E60650C0ULL, 0x7911EFE891A51E01ULL}},
+    {{0xC003AFFFFFFFFFFFULL, 0xFFFFFFFFFFFF8B95ULL},
+     {0xBF90C7A4662B9BEAULL, 0xCBCE1CEDC0362A03ULL}, {0x3F1B48D1A24092B6ULL, 0xD1A1C61A87B50D93ULL}},
+    {{0xC003B00000000000ULL, 0x000000000000746BULL},
+     {0x3F90C7A4662B9BEAULL, 0xCBCE1D9D35ED037BULL}, {0x3F1DBE680DE86113ULL, 0x5F3C5DC4EF40F799ULL}},
+    {{0xC003BFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFBD8ULL},
+     {0x3F918A2635085D37ULL, 0x3C5C51C36323180AULL}, {0xBF1A49B63D463F01ULL, 0xC10F51CA42694501ULL}},
+    {{0xC003C00000000000ULL, 0x0000000000000428ULL},
+     {0xBF918A2635085D37ULL, 0x3C5C51C3462E904BULL}, {0x3F1F8B3BE8B44E92ULL, 0x00DD25F8F182A7BFULL}},
+    {{0xC003CFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFDBULL},
+     {0xBF913033A5E53A94ULL, 0x2A0E78C44C82F7A5ULL}, {0x3F1D1B5D561B23DBULL, 0xAC1EB96F3A25D605ULL}},
+    {{0xC003D00000000000ULL, 0x0000000000000025ULL},
+     {0x3F913033A5E53A94ULL, 0x2A0E78C44C8BDF3EULL}, {0xBF1F52E620BA5EBDULL, 0xB35A4F38A1EF3C54ULL}},
+};
+
+/* The index in F128_LGAMMA_NEG_ZEROS of the zero next to x = m + r on the
+ * same side of the integer m, or -1. */
+static int f128_lgamma_neg_zero_index(lf_float128 m, lf_float128 r) {
+    double md = f_dbl(m);
+    int n = (int)(sizeof F128_LGAMMA_NEG_ZEROS
+                  / sizeof F128_LGAMMA_NEG_ZEROS[0]);
+    /* the zeros next to -k, k = 2..29, are those with indices < n */
+    if (md > -2.0 || md < -29.0) return -1;
+    int k = (int)(-md);
+    int i = f128_sign(r) ? 2 * (k - 2) : 2 * k - 5;
+    return i < n ? i : -1;
+}
+
+/* log|Γ(x)| for x close to the zero x0 = w[0] + w[1] + w[2] of it on the
+ * negative axis, as a double-word, with r0 = x0 - m the offset from the
+ * nearest integer m. With d = x - x0 (w[2] matters when x is the binary128
+ * number nearest to x0),
+ * log|Γ(x)| = log|Γ(x)| - log|Γ(x0)| = A + B, where by the reflection
+ * formula
+ *   A = -log(sin(πx) / sin(πx0)) = -log1p(cot(πx0) sin(πd) - 2 sin^2(πd/2)),
+ *   B = log Γ(y) - log Γ(y + h),  y = 1 - x0, h = -d.
+ * With z = y + n >= 40 and the Stirling series S,
+ *   log Γ(y + h) - log Γ(y) = S(z + h) - S(z) - log prod_{k<n} (1 + h/(y+k)),
+ *   S(z + h) - S(z) = (z - 1/2) log1p(h/z) + h (log(z + h) - 1)
+ *                     + sum_m c_m (u^m - v^m),
+ * with u = 1/(z + h), v = 1/z and u^m - v^m = (u - v) sum_{j<m} u^j v^(m-1-j),
+ * u - v = -h / (z (z + h)). Every term is a multiple of d computed without
+ * cancellation, so the result keeps its relative accuracy however small
+ * it is, unlike the reflection formula, whose error is about 2^-140
+ * relative to log Γ(1 - x). */
+static f128_dw f128_log_gamma_near_zero_dw(lf_float128 x,
+                                           const uint64_t w[3][2],
+                                           f128_dw r0) {
+    lf_float128 zero = f128_make_zero(0);
+    lf_float128 one_q = f128_one();
+    f128_dw one = dw_make(one_q, zero);
+    f128_dw pi = dw_from_bits(F128_PI);
+    f128_dw x0 = dw_from_bits(w);
+    /* x - x0.hi is exact, x and x0.hi being within a factor of 2 */
+    f128_dw d = two_sum(f_sub(x, x0.hi), f_neg(x0.lo));
+    d = dw_add(d, dw_make(f_neg(f128_bits(w[2])), zero));
+
+    /* cot(πx0) = cot(πr0) = ±cos(πa) / sin(πa), a = |r0| < 1/2 */
+    int r0_neg = f128_sign(r0.hi);
+    f128_dw a = r0_neg ? dw_neg(r0) : r0;
+    int swap = f_dbl(a.hi) > 0.25;
+    if (swap) a = dw_add(dw_make(f128_half(), zero), dw_neg(a));
+    f128_dw pa = dw_mul(pi, a);
+    f128_dw s = f128_sin_dw(pa), c = f128_cos_dw(pa);
+    f128_dw cot = swap ? dw_div(s, c) : dw_div(c, s);
+    if (r0_neg) cot = dw_neg(cot);
+
+    f128_dw pd = dw_mul(pi, d);
+    f128_dw s1 = f128_sin_dw(pd);
+    f128_dw s2 = f128_sin_dw(dw_scale(pd, -1));
+    f128_dw sm1 = dw_add(dw_mul(cot, s1),
+                         dw_neg(dw_scale(dw_mul(s2, s2), 1)));
+    f128_dw sum_a = dw_neg(f128_log1p_small_dw(sm1));
+
+    f128_dw h = dw_neg(d);
+    /* z = y = 1 - x0, then shifted up to 40 */
+    f128_dw z = dw_add(two_sum(one_q, f_neg(x0.hi)),
+                       dw_make(f_neg(x0.lo), zero));
+    /* e = prod_k (1 + h/(y+k)) - 1; all the factors are on the same side
+     * of 1 */
+    f128_dw e = dw_make(zero, zero);
+    while (f_dbl(z.hi) < 40.0) {
+        f128_dw q = dw_div(h, z);
+        e = dw_add(e, dw_add(q, dw_mul(e, q)));
+        z = dw_add(z, one);
+    }
+    f128_dw zh = dw_add(z, h);
+    f128_dw t1 = dw_mul(dw_add(z, dw_make(f_neg(f128_half()), zero)),
+                        f128_log1p_small_dw(dw_div(h, z)));
+    f128_dw t2 = dw_mul(h, dw_add(f128_log_dw2(zh), dw_neg(one)));
+    /* sum_m c_m g_m with g_m = sum_{j<m} u^j v^(m-1-j): c_1 = 1/12, then
+     * F128_STIRLING for m = 3, 5, ..., 31; g_{m+1} = v g_m + u^m */
+    lf_float128 u = f_div(one_q, zh.hi), v = f_div(one_q, z.hi);
+    lf_float128 g = one_q, um = one_q;
+    lf_float128 cg = f_div(one_q, f_int(12));
+    for (int i = 0; i < 15; i++) {
+        for (int k = 0; k < 2; k++) {
+            um = f_mul(um, u);
+            g = f_add(f_mul(v, g), um);
+        }
+        cg = f_add(cg, f_mul(f128_bits(F128_STIRLING[i]), g));
+    }
+    f128_dw uv = dw_div(h, dw_mul(z, zh));   /* v - u */
+    f128_dw t3 = dw_neg(dw_mul_q(uv, cg));
+    f128_dw sum_b = dw_add(f128_log1p_small_dw(e),
+                           dw_neg(dw_add(t1, dw_add(t2, t3))));
+    return dw_add(sum_a, sum_b);
+}
+
+/* log|Γ(x)| for x < 0 not an integer, |x| >= 7.5e-37, as a double-word;
+ * sets *neg when Γ(x) < 0. */
+static f128_dw f128_log_gamma_neg_dw(lf_float128 x, int *neg) {
+    /* x = m + r with m the nearest integer, so that r is exact and
+     * sin(πx) = (-1)^m sin(πr), |r| <= 1/2. */
+    lf_float128 m = lf_f128_floor(f_add(x, f128_half()));
+    lf_float128 r = f_sub(x, m);
+    f128_parts pm = f128_unpack(m);
+    int m_odd = !pm.is_zero && f128_integer_kind(pm) == 1;
+    *neg = m_odd != f128_sign(r);
+    /* Within |x0 - m|/16 of a zero x0 the reflection formula below loses
+     * its relative accuracy. */
+    int iz = f128_lgamma_neg_zero_index(m, r);
+    if (iz >= 0) {
+        const uint64_t (*z)[2] = F128_LGAMMA_NEG_ZEROS[iz];
+        f128_dw x0 = dw_from_bits(z);
+        /* x0.hi - m is exact; w2 matters when r0 is tiny */
+        f128_dw r0 = fast_two_sum(f_sub(x0.hi, m), x0.lo);
+        r0 = dw_add(r0, dw_make(f128_bits(z[2]), f128_make_zero(0)));
+        if (fabs(f_dbl(f_sub(x, x0.hi))) < fabs(f_dbl(r0.hi)) / 16) {
+            return f128_log_gamma_near_zero_dw(x, z, r0);
+        }
+    }
+    /* log|Γ(x)| = log(π / |sin(πx)|) - log Γ(1 - x) */
+    f128_dw q = dw_div(dw_from_bits(F128_PI),
+                       f128_sinpi_dw(lf_f128_abs(r)));
+    f128_dw l = f128_log_gamma_dw(two_sum(f128_one(), f_neg(x)));
+    return dw_add(f128_log_dw2(q), dw_neg(l));
+}
+
+lf_float128 lf_f128_lgamma(lf_float128 x) {
+    f128_parts p = f128_unpack(x);
+    if (p.is_nan) return f128_make_nan();
+    /* log Γ has poles at 0 and the negative integers, and tends to +Inf as
+     * x -> -Inf, matching C lgamma. */
+    if (p.is_inf || f128_is_nonpos_int(x)) return f128_make_inf(0);
     int64_t n_int = 0;
     lf_float128 fac;
     if (f128_positive_int(x, &n_int) && f128_factorial_exact(n_int, &fac)) {
         return lf_f128_log(fac);
     }
-    lf_float128 z = x;
-    int n = 0;
-    lf_float128 limit = f_int(40);
-    while (f128_cmp_internal(z, limit) < 0 && n < 80) {
-        z = f_add(z, f128_one());
-        n++;
+    /* log|Γ(x)| = -log|x| - γ x + O(x^2) */
+    if (fabs(f_dbl(x)) < 7.5e-37) return f_neg(lf_f128_log(lf_f128_abs(x)));
+    if (p.sign) {
+        int neg;
+        return f128_log_gamma_neg_dw(x, &neg).hi;
     }
-    lf_float128 lg = f128_stirling_log_gamma(z);
-    lf_float128 t = x;
-    for (int i = 0; i < n; i++) {
-        lg = f_sub(lg, lf_f128_log(t));
-        t = f_add(t, f128_one());
-    }
-    return lg;
-}
-
-lf_float128 lf_f128_lgamma(lf_float128 x) {
-    f128_parts p = f128_unpack(x);
-    if (p.is_nan || (p.is_inf && p.sign)) return f128_make_nan();
-    if (p.is_inf) return f128_make_inf(0);
-    if (f128_is_nonpos_int(x)) return f128_make_nan();
-    if (f128_cmp_internal(x, f128_half()) < 0) {
-        /* ln|Γ(x)| = ln π - ln|sin(πx)| - ln Γ(1-x) */
-        lf_float128 pi = lf_float128_from_str(
-            "3.14159265358979323846264338327950288");
-        lf_float128 s = lf_f128_abs(lf_f128_sin(f_mul(pi, x)));
-        if (f128_is_zero(s)) return f128_make_nan();
-        return f_sub(f_sub(lf_f128_log(pi), lf_f128_log(s)),
-            f128_log_gamma_pos(f_sub(f128_one(), x)));
-    }
-    return f128_log_gamma_pos(x);
+    return f128_log_gamma_dw(dw_make(x, f128_make_zero(0))).hi;
 }
 
 lf_float128 lf_f128_tgamma(lf_float128 x) {
     f128_parts p = f128_unpack(x);
     if (p.is_nan) return x;
     if (p.is_inf) return p.sign ? f128_make_nan() : f128_make_inf(0);
+    /* Γ(+-0) = +-Inf; the negative integers are NaN, matching C tgamma. */
+    if (p.is_zero) return f128_make_inf(p.sign);
     if (f128_is_nonpos_int(x)) return f128_make_nan();
     int64_t n_int = 0;
     lf_float128 fac;
     if (f128_positive_int(x, &n_int) && f128_factorial_exact(n_int, &fac)) {
         return fac;
     }
-    if (f128_cmp_internal(x, f128_half()) < 0) {
-        lf_float128 pi = lf_float128_from_str(
-            "3.14159265358979323846264338327950288");
-        lf_float128 s = lf_f128_sin(f_mul(pi, x));
-        if (f128_is_zero(s)) return f128_make_nan();
-        return f_div(pi, f_mul(s, lf_f128_tgamma(f_sub(f128_one(), x))));
+    /* Γ(x) = 1/x - γ + O(x) */
+    if (fabs(f_dbl(x)) < 7.5e-37) return f_div(f128_one(), x);
+    if (p.sign) {
+        int neg;
+        f128_dw l = f128_log_gamma_neg_dw(x, &neg);
+        return f_sign(f128_exp_dw(l), neg);
     }
-    return lf_f128_exp(f128_log_gamma_pos(x));
+    return f128_exp_dw(f128_log_gamma_dw(dw_make(x, f128_make_zero(0))));
 }
 
 lf_float128 lf_f128_hypot(lf_float128 x, lf_float128 y) {
@@ -3299,6 +3864,9 @@ lf_f128_abi lf_tandq(lf_f128_abi a)                 { return lf_f128_to_abi(lf_f
 lf_f128_abi lf_asindq(lf_f128_abi a)                { return lf_f128_to_abi(lf_f128_asind(lf_f128_from_abi(a))); }
 lf_f128_abi lf_acosdq(lf_f128_abi a)                { return lf_f128_to_abi(lf_f128_acosd(lf_f128_from_abi(a))); }
 lf_f128_abi lf_atandq(lf_f128_abi a)                { return lf_f128_to_abi(lf_f128_atand(lf_f128_from_abi(a))); }
+lf_f128_abi lf_sinpiq(lf_f128_abi a)                { return lf_f128_to_abi(lf_f128_sinpi(lf_f128_from_abi(a))); }
+lf_f128_abi lf_cospiq(lf_f128_abi a)                { return lf_f128_to_abi(lf_f128_cospi(lf_f128_from_abi(a))); }
+lf_f128_abi lf_tanpiq(lf_f128_abi a)                { return lf_f128_to_abi(lf_f128_tanpi(lf_f128_from_abi(a))); }
 #endif
 
 /* ========================================================================
@@ -3522,6 +4090,9 @@ _LF_SHIM1(lf_tandq,         lf_f128_tand)
 _LF_SHIM1(lf_asindq,        lf_f128_asind)
 _LF_SHIM1(lf_acosdq,        lf_f128_acosd)
 _LF_SHIM1(lf_atandq,        lf_f128_atand)
+_LF_SHIM1(lf_sinpiq,        lf_f128_sinpi)
+_LF_SHIM1(lf_cospiq,        lf_f128_cospi)
+_LF_SHIM1(lf_tanpiq,        lf_f128_tanpi)
 #if defined(__APPLE__) || defined(_WIN32)
 _LF_SHIM1(__negtf2,          __negtf2_lf_impl)
 _LF_SHIM_FROM_SCALAR(__extenddftf2,   __extenddftf2_lf_impl)
@@ -3627,6 +4198,108 @@ int lf_f128_eq(lf_float128 a, lf_float128 b) {
 }
 
 #endif /* LFORTRAN_HAVE_REAL128 */
+
+/* ========================================================================
+ * Q2. Host long double <-> binary128 (kind 10 <-> kind 16)
+ *
+ * A kind-10 value is a host long double: the x87 extended format (64-bit
+ * significand), a double (53) or binary128 itself (113); other formats,
+ * such as IBM double-double, are rejected at compile time. Widening is
+ * exact; narrowing rounds once, to nearest even, subnormals included.
+ * x87 extended and binary128 share the exponent bias and range, so the x87
+ * conversions only move and round the significand.
+ * ======================================================================== */
+
+lf_float128 lf_f128_from_long_double(long double v) {
+#if LDBL_MANT_DIG == 64
+    uint64_t mant;
+    uint16_t sign_exponent;
+    memcpy(&mant, &v, sizeof(mant));
+    memcpy(&sign_exponent, (const char*)&v + 8, sizeof(sign_exponent));
+    uint64_t exponent = sign_exponent & 0x7FFF;
+    uint64_t fraction = mant & 0x7FFFFFFFFFFFFFFFULL;
+    uint64_t hi = (uint64_t)(sign_exponent >> 15) << 63;
+    uint64_t lo = fraction << 49;
+    if (exponent == 0x7FFF) {
+        /* Inf, or a NaN, which stays a (quiet) NaN */
+        hi |= (0x7FFFULL << 48) | (fraction >> 15);
+        if (fraction != 0) hi |= 1ULL << 47;
+    } else {
+        /* A pseudo-denormal (exponent 0 with the integer bit set) is the
+         * minimum normal. */
+        if (exponent == 0 && (mant >> 63)) exponent = 1;
+        hi |= (exponent << 48) | (fraction >> 15);
+    }
+    lf_float128 out;
+    memcpy(out.bytes, &lo, sizeof(lo));
+    memcpy(out.bytes + 8, &hi, sizeof(hi));
+    return out;
+#elif LDBL_MANT_DIG == 113
+    lf_float128 out;
+    memcpy(out.bytes, &v, sizeof(out.bytes));
+    return out;
+#elif LDBL_MANT_DIG == 53
+    /* Exact for a 53-bit long double */
+    return lf_f128_from_double((double)v);
+#else
+#error "unsupported long double format"
+#endif
+}
+
+long double lf_f128_to_long_double(lf_float128 v) {
+#if LDBL_MANT_DIG == 64
+    uint64_t lo, hi;
+    memcpy(&lo, v.bytes, sizeof(lo));
+    memcpy(&hi, v.bytes + 8, sizeof(hi));
+    uint64_t sign = hi >> 63;
+    uint64_t exponent = (hi >> 48) & 0x7FFF;
+    uint64_t frac_hi = hi & 0xFFFFFFFFFFFFULL;
+    uint64_t mant = 0;
+    if (exponent == 0x7FFF) {
+        if ((frac_hi | lo) != 0) {
+            mant = (3ULL << 62) | (frac_hi << 14) | (lo >> 50);
+        } else {
+            mant = 1ULL << 63;
+        }
+    } else {
+        /* The 63 fraction bits kept, and the 49 below them to round away. */
+        uint64_t kept = (frac_hi << 15) | (lo >> 49);
+        uint64_t rest = lo & ((1ULL << 49) - 1);
+        if (exponent == 0) {
+            mant = kept;
+        } else {
+            mant = (1ULL << 63) | kept;
+        }
+        uint64_t half = 1ULL << 48;
+        if (rest > half || (rest == half && (mant & 1))) {
+            mant++;
+            if (mant == 0) {
+                mant = 1ULL << 63;
+                exponent++;
+            } else if (exponent == 0 && (mant >> 63)) {
+                exponent = 1;
+            }
+        }
+        if (exponent == 0x7FFF) {
+            mant = 1ULL << 63;
+        }
+    }
+    uint16_t sign_exponent = (uint16_t)((sign << 15) | exponent);
+    long double out = 0;
+    memcpy(&out, &mant, sizeof(mant));
+    memcpy((char*)&out + 8, &sign_exponent, sizeof(sign_exponent));
+    return out;
+#elif LDBL_MANT_DIG == 113
+    long double out;
+    memcpy(&out, v.bytes, sizeof(v.bytes));
+    return out;
+#elif LDBL_MANT_DIG == 53
+    /* Rounds once for a 53-bit long double */
+    return (long double)lf_f128_to_double(v);
+#else
+#error "unsupported long double format"
+#endif
+}
 
 /* ========================================================================
  * R. format_float128_fortran — Fortran print formatting for real(16)

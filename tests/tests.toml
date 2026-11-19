@@ -1556,6 +1556,10 @@ filename = "boz1.f90"
 tokens = true
 
 [[test]]
+filename = "show_tokens_01.f90"
+tokens = true
+
+[[test]]
 filename = "derived_type1.f90"
 asr = true
 
@@ -4719,6 +4723,14 @@ filename = "../integration_tests/gpu_kernel_source_08.f90"
 gpu_cuda_kernel = true
 
 [[test]]
+filename = "../integration_tests/gpu_array_reduction_03.f90"
+gpu_cuda_kernel = true
+
+[[test]]
+filename = "../integration_tests/gpu_array_reduction_05.f90"
+gpu_cuda_kernel = true
+
+[[test]]
 filename = "../integration_tests/gpu_metal_213.f90"
 gpu_cuda_kernel = true
 
@@ -5040,6 +5052,11 @@ gpu_offload_cuda = true
 [[test]]
 filename = "../integration_tests/gpu_decline_52.f90"
 gpu_offload_cuda = true
+
+[[test]]
+filename = "../integration_tests/gpu_decline_53.f90"
+gpu_offload_cuda = true
+gpu_offload_metal = true
 
 [[test]]
 filename = "gpu_decline_impure_condition.f90"
@@ -5856,6 +5873,14 @@ gpu_cuda_kernel = true
 [[test]]
 filename = "../integration_tests/gpu_lanes_scattered_01.f90"
 gpu_cuda_kernel = true
+
+# The portable integer dot product of four signed bytes (written with
+# shifta and shiftl), as a function, nested, and in a loop, becomes the
+# CUDA dp4a instruction or Metal vector arithmetic; near misses stay arithmetic.
+[[test]]
+filename = "../integration_tests/gpu_dp4a_idiom_01.f90"
+gpu_cuda_kernel = true
+gpu_metal_kernel = true
 
 # A sum that reads across columns followed by a loop that updates the array
 # from it, in one iteration: the sum is shared out for a launch of few
@@ -8030,3 +8055,28 @@ options = "--std=f23"
 [[test]]
 filename = "read_real16_long_token_error_01.f90"
 run = true
+
+# Lane loops of a length known at compile time, unrolled by the iterations of
+# a lane (`#pragma unroll 4` for 128), with unsigned trip counts.
+[[test]]
+filename = "../integration_tests/gpu_lanes_const_trips_01.f90"
+gpu_cuda_kernel = true
+
+# The vectors and the scalar elements a loop of a wide-load kernel reads for
+# certain, read at the start of its body; not past an `exit`.
+[[test]]
+filename = "../integration_tests/gpu_wide_loads_hoist_01.f90"
+gpu_cuda_kernel = true
+
+# A q8 product of four rows per iteration runs an iteration on the 64 lanes
+# of a block (`__launch_bounds__(64, ...)`, lanes named as a constant); one of
+# two rows on the 32 lanes of a warp.
+[[test]]
+filename = "../integration_tests/gpu_wide_rows_01.f90"
+gpu_cuda_kernel = true
+
+# Consecutive combinations of the lanes of a whole block (sums, maxima,
+# minima, products, of reals and integers) meet in shared memory together.
+[[test]]
+filename = "../integration_tests/gpu_lanes_block_03.f90"
+gpu_cuda_kernel = true

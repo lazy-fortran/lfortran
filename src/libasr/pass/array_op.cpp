@@ -342,6 +342,15 @@ class FixTypeVisitor: public ASR::CallReplacerOnExpressionsVisitor<FixTypeVisito
         }
     }
 
+    void visit_CoarrayRef(const ASR::CoarrayRef_t& x) {
+        ASR::CallReplacerOnExpressionsVisitor<FixTypeVisitor>::visit_CoarrayRef(x);
+        ASR::CoarrayRef_t& xx = const_cast<ASR::CoarrayRef_t&>(x);
+        if (!ASRUtils::is_array(ASRUtils::expr_type(x.m_var)) &&
+             ASRUtils::is_array(x.m_type)) {
+            xx.m_type = ASRUtils::extract_type(xx.m_type);
+        }
+    }
+
     void visit_ArrayItem(const ASR::ArrayItem_t& x) {
         ASR::CallReplacerOnExpressionsVisitor<FixTypeVisitor>::visit_ArrayItem(x);
         // The shape of `w%u(2)` is the shape of its base `w`. Once the base
@@ -1087,7 +1096,7 @@ class ArrayOpVisitor: public ASR::CallReplacerOnExpressionsVisitor<ArrayOpVisito
             x.m_iomsg, x.m_iostat, x.m_id,
             inner_vals.p, 1,
             x.m_separator, x.m_end, x.m_overloaded,
-            x.m_is_formatted, x.m_nml, x.m_rec, x.m_pos, x.m_asynchronous, x.m_decimal));
+            x.m_is_formatted, x.m_nml, x.m_rec, x.m_pos, x.m_asynchronous, x.m_decimal, x.m_delim));
 
         // Wrap Scalar FileWrites in DoLoop
         Vec<ASR::stmt_t*> loop_body; loop_body.reserve(al, 1);

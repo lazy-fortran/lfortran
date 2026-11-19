@@ -102,6 +102,12 @@ struct GpuDeviceCapabilities {
     // meet in shared memory behind a block barrier.
     int lanes_block = 1;
     int64_t lanes_block_iterations_max = 1024;
+    // A kernel that reads vectors of 16 bytes (gpu_wide_loads.cpp) gives
+    // each iteration a block of this many threads, all its lanes, as a
+    // hand-written matrix-vector product gives the rows of a block: twice
+    // the lanes of a warp keep twice as many loads in flight for each row,
+    // with no more registers. Zero keeps lanes_per_iteration.
+    int lanes_wide = 0;
     // A kernel whose lanes share out a sum that reads across the columns of
     // an array, each lane its own column, while one lane per iteration
     // would read along them with consecutive threads (gpu_vector_lanes.cpp,
@@ -166,6 +172,16 @@ struct GpuDeviceCapabilities {
     // then folds a 32nd of the slots, and a launch can run many more
     // threads than the host could fold the slots of.
     bool reduction_warp_slots = false;
+
+    // Whether a REDUCE of an array, whose elements every iteration names
+    // the same, is combined on the device (GpuReduceCombine): the threads
+    // of a block combine what they accumulated, each block leaves its part
+    // in a scratch buffer of the launch, and the block that finishes last,
+    // which an atomic counter tells, combines the parts in the order of the
+    // blocks and applies them to the elements. The host never reads them,
+    // so it does not wait for the launch. Where it is not, such a loop is
+    // an error.
+    bool array_reductions = false;
 
     // Whether a launch of more iterations than the chunk limit
     // (PassOptions::gpu_chunk_limit) runs its kernel once per chunk of the
@@ -237,6 +253,17 @@ enum class GpuDeclineReason {
     // which the pass never reached.
     LoopNotLowered,
     ReductionClause,
+    // A REDUCE of an array (`name`), which the device combines in place
+    // (gpu_offload.cpp): on a device that does not, of a type or an
+    // operation it does not combine (`type`, the element type), referenced
+    // other than as elements every iteration names the same (`a(k)`, not
+    // `a(i)`, which would need atomic updates), or in a loop that does not
+    // run in a grid-stride loop (a cycle of the loop, or a scalar it defines
+    // that is used after it).
+    ArrayReductionDevice,
+    ArrayReductionType,
+    ArrayReductionElement,
+    ArrayReductionLoop,
     LoopWithoutIndex,
     IncompleteLoopHead,
     // A loop index of an integer kind wider than the device numbers the

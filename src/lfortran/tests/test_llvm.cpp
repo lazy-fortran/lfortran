@@ -5191,6 +5191,94 @@ end subroutine
     CHECK(r.result.f64 == 12.0);
 }
 
+// The type of a procedure of an earlier cell can call a procedure of that
+// cell: the getter through which the bound of a function result reads a
+// use-associated variable. A later cell copies that call into the type of
+// its own call of the procedure, so it must name the getter of the scope
+// later cells see.
+TEST_CASE("FortranEvaluator earlier cell's function with a getter in its result bound") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2("module mrepl4; integer :: n = 3; end module").ok);
+    REQUIRE(e.evaluate2("function ff() result(r); use mrepl4, only: n; "
+        "real :: r(n); r = 1; end function").ok);
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("sum(ff())");
+    REQUIRE(r.ok);
+    CHECK(r.result.type == FortranEvaluator::EvalResult::real4);
+    CHECK(r.result.f32 == 3);
+    r = e.evaluate2("size(ff())");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 3);
+}
+
+// A procedure calling an earlier cell's function whose result bound reads a
+// use-associated variable through a getter of that cell depends on the
+// getter, which the type of the call names.
+TEST_CASE("FortranEvaluator later procedure calling a function with a getter in its result bound") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2("module mrepl6; integer :: n = 3; end module").ok);
+    REQUIRE(e.evaluate2("function ff6() result(r); use mrepl6, only: n; "
+        "real :: r(n); r = 1; end function").ok);
+    REQUIRE(e.evaluate2("function gg6() result(s); real :: s; "
+        "s = sum(ff6()); end function").ok);
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("gg6()");
+    REQUIRE(r.ok);
+    CHECK(r.result.type == FortranEvaluator::EvalResult::real4);
+    CHECK(r.result.f32 == 3);
+    REQUIRE(e.evaluate2("subroutine ss6(s); real, intent(out) :: s; "
+        "s = 2 * sum(ff6()); end subroutine").ok);
+    REQUIRE(e.evaluate2("real :: s6").ok);
+    REQUIRE(e.evaluate2("call ss6(s6)").ok);
+    r = e.evaluate2("s6");
+    REQUIRE(r.ok);
+    CHECK(r.result.f32 == 6);
+}
+
+// The bound of an earlier cell's function result can only be evaluated
+// through a helper function, which the cell calling the function creates.
+TEST_CASE("FortranEvaluator earlier cell's function with a result bound needing a helper") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2("function fc(a) result(r); integer, intent(in) :: a(:); "
+        "integer :: r(maxval(shape(a))); r = a + 1; end function").ok);
+    LCompilers::Result<FortranEvaluator::EvalResult> r
+        = e.evaluate2("sum(fc([1, 2, 3]))");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 9);
+    r = e.evaluate2("sum(fc([1, 2, 3, 4]))");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 14);
+
+    REQUIRE(e.evaluate2("module mfc; contains; function gc(a) result(r); "
+        "integer, intent(in) :: a(:); integer :: r(maxval(shape(a))); "
+        "r = 2 * a; end function; end module").ok);
+    REQUIRE(e.evaluate2("use mfc").ok);
+    REQUIRE(e.evaluate2("integer :: x(3)").ok);
+    REQUIRE(e.evaluate2("x = gc([1, 2, 3])").ok);
+    r = e.evaluate2("sum(x)");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 12);
+
+    // A type-bound call names the binding of the function.
+    REQUIRE(e.evaluate2("module mtc; type :: tc; contains; "
+        "procedure, nopass :: f => hc; end type; contains; "
+        "function hc(a) result(r); integer, intent(in) :: a(:); "
+        "integer :: r(maxval(shape(a))); r = a + 1; end function; "
+        "end module").ok);
+    REQUIRE(e.evaluate2("use mtc").ok);
+    REQUIRE(e.evaluate2("type(tc) :: y").ok);
+    r = e.evaluate2("sum(y%f([1, 2, 3]))");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 9);
+}
+
 TEST_CASE("FortranEvaluator interface body to an earlier cell's function as actual argument") {
     CompilerOptions cu;
     cu.interactive = true;
@@ -5457,6 +5545,167 @@ end function
     CHECK(r.result.i32 == 7);
 }
 
+// Evaluates a cell that must be rejected and returns its rendered messages.
+static std::string rejected_cell_message(FortranEvaluator &e, CompilerOptions cu,
+        const std::string &code) {
+    LCompilers::LocationManager lm;
+    LCompilers::PassManager lpm;
+    lpm.use_default_passes();
+    lpm.skip_llvm_backend_passes();
+    LCompilers::diag::Diagnostics d;
+    LCompilers::Result<FortranEvaluator::EvalResult> r
+        = e.evaluate(code, false, lm, lpm, d);
+    CHECK(!r.ok);
+    cu.use_colors = false;
+    return d.render(lm, cu);
+}
+
+TEST_CASE("FortranEvaluator implicit interface reference to an undefined procedure in a cell") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.implicit_interface = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2("integer :: z0").ok);
+    // The statements of a cell run at once, so a procedure they reference
+    // has to be defined already; it cannot get an implicit interface.
+    for (const char *cell : {"call c()", "c()", "print *, c()", "z0 = c(1)",
+            "integer :: n = c()"}) {
+        INFO(cell);
+        std::string message = rejected_cell_message(e, cu, cell);
+        CHECK(message.find("Function 'c' not found") != std::string::npos);
+    }
+    // An EXTERNAL declaration in an earlier cell does not define `q` either.
+    REQUIRE(e.evaluate2("external q").ok);
+    std::string message = rejected_cell_message(e, cu, "call q()");
+    CHECK(message.find("Function 'q' not found") != std::string::npos);
+    // The specification part of a procedure defined in a cell is not the
+    // cell's top-level scope, so it keeps the specification function
+    // diagnostic.
+    message = rejected_cell_message(e, cu, R"(subroutine s13(n)
+integer, intent(in) :: n
+real :: w(nf(n))
+w = 1
+end subroutine
+)");
+    CHECK(message.find("so it is not a specification function")
+        != std::string::npos);
+    CHECK(message.find("not found") == std::string::npos);
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("z0 + 2");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 2);
+}
+
+TEST_CASE("FortranEvaluator implicit interface reference in a cell BLOCK") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.implicit_interface = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2(R"(subroutine s(x) bind(c, name="csub")
+integer, intent(out) :: x
+x = 42
+end subroutine
+)").ok);
+    REQUIRE(e.evaluate2("integer :: z0").ok);
+#ifndef __EMSCRIPTEN__
+    // In the WASM build this cell does not load ("function index ... is out
+    // of bounds", #17138): the implicit-interface call of `csub` goes
+    // through a procedure pointer.
+    // Inside a BLOCK, `csub` gets an implicit interface; the JIT linker
+    // resolves it to the subroutine of the first cell.
+    REQUIRE(e.evaluate2(R"(block
+call csub(z0)
+end block
+)").ok);
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("z0");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 42);
+#endif
+}
+
+// This cell is rejected only by ASR verification, which runs only in
+// assertion builds; semantics does not diagnose it yet (#13804).
+#if defined(WITH_LFORTRAN_ASSERT)
+TEST_CASE("FortranEvaluator call of a procedure whose cell was rejected") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.implicit_interface = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2("integer :: z0").ok);
+    REQUIRE(e.evaluate2(R"(integer function fn()
+fn = 1
+end function
+)").ok);
+    // `fn` is a function, so it cannot be called as a subroutine.
+    rejected_cell_message(e, cu, R"(subroutine c()
+call fn()
+end subroutine
+)");
+    // `c` was never defined, so it cannot be called.
+    std::string message = rejected_cell_message(e, cu, "call c()");
+    CHECK(message.find("Function 'c' not found") != std::string::npos);
+    // The session stays usable.
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("fn()");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 1);
+}
+#endif
+
+TEST_CASE("FortranEvaluator reference to a procedure whose cell had a semantic error") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.implicit_interface = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2("integer :: z0").ok);
+    REQUIRE(e.evaluate2(R"(integer function fn()
+fn = 1
+end function
+integer function ifn()
+ifn = 5
+end function
+)").ok);
+    SUBCASE("subroutine") {
+        REQUIRE(e.evaluate2(R"(subroutine app(f)
+external f
+call f()
+end subroutine
+)").ok);
+        std::string message = rejected_cell_message(e, cu, R"(subroutine c()
+call app(qq)
+end subroutine
+)");
+        CHECK(message.find("Variable 'qq' is not declared") != std::string::npos);
+        message = rejected_cell_message(e, cu, "call c()");
+        CHECK(message.find("Function 'c' not found") != std::string::npos);
+    }
+    SUBCASE("function with ENTRY") {
+        REQUIRE(e.evaluate2(R"(integer function app(f)
+integer, external :: f
+app = f() + 1
+end function
+)").ok);
+        std::string message = rejected_cell_message(e, cu, R"(integer function c()
+c = app(qq) + 400
+return
+entry c2()
+c2 = 410
+end function
+)");
+        CHECK(message.find("Variable 'qq' is not declared") != std::string::npos);
+        message = rejected_cell_message(e, cu, "c()");
+        CHECK(message.find("Function 'c' not found") != std::string::npos);
+        LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("app(ifn)");
+        REQUIRE(r.ok);
+        CHECK(r.result.i32 == 6);
+    }
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2("fn()");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 1);
+}
+
 TEST_CASE("FortranEvaluator interface body used by a contained procedure") {
     CompilerOptions cu;
     cu.interactive = true;
@@ -5487,6 +5736,40 @@ end function
     r = e.evaluate2("c()");
     REQUIRE(r.ok);
     CHECK(r.result.i32 == 6);
+}
+
+TEST_CASE("FortranEvaluator global procedure pointer declaration") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+    FortranEvaluator e(cu);
+    REQUIRE(e.evaluate2(R"(integer function f()
+f = 1
+end function
+)").ok);
+    // A procedure pointer declared at the top level of a cell lives in the
+    // translation unit itself (#16337).
+    REQUIRE(e.evaluate2("procedure(f), pointer :: p").ok);
+    // The same declaration in the cell that uses the module of its interface.
+    REQUIRE(e.evaluate2(R"(module pointer_baseline
+contains
+integer function g() bind(c)
+g = 2
+end function
+end module
+use pointer_baseline
+procedure(g), pointer :: q
+)").ok);
+#ifndef __EMSCRIPTEN__
+    // Procedure pointers do not work in the WASM interactive executor yet
+    // (#17138).
+    REQUIRE(e.evaluate2("p => f").ok);
+    REQUIRE(e.evaluate2("q => g").ok);
+    LCompilers::Result<FortranEvaluator::EvalResult> r
+        = e.evaluate2("p() + 10 * q()");
+    REQUIRE(r.ok);
+    CHECK(r.result.i32 == 21);
+#endif
 }
 
 TEST_CASE("FortranEvaluator interface body in a module used by another module") {
@@ -5522,21 +5805,6 @@ end module
     CHECK(r.result.i32 == 7);
 }
 
-#if !defined(__EMSCRIPTEN__) && LLVM_VERSION_MAJOR != 8
-// The evaluator's message for a symbol the JIT cannot resolve; LLVM 7
-// reports it from findSymbol()/getAddress(), newer LLVM from lookup().
-// In the WASM build an unresolved symbol is instead a JavaScript "Dynamic
-// linking error" that aborts the process, so the checks below that call a
-// cell that does not link are native only. They are also skipped with
-// LLVM 8, whose ORC ExecutionSession::lookup() reports "Symbols not found"
-// but then never returns when a symbol fails to materialize.
-static bool is_jit_symbol_lookup_failure(const std::string &msg) {
-    return msg.find("lookup() failed to find the symbol") != std::string::npos
-        || msg.find("findSymbol() failed to find the symbol") != std::string::npos
-        || msg.find("getAddress() failed for symbol") != std::string::npos;
-}
-#endif
-
 TEST_CASE("FortranEvaluator interface body in a generic interface block") {
     CompilerOptions cu;
     cu.interactive = true;
@@ -5550,27 +5818,27 @@ end function
     // The generic interface refers to the interface body, so it stays and
     // the cell compiles; as without an earlier `fn`, a call of `c` then
     // does not link.
-    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2(R"(integer function c()
+    REQUIRE(e.evaluate2(R"(integer function c()
 interface gen
 integer function fn()
 end function
 end interface
 c = gen()
 end function
-)");
-    CHECK(r.ok);
-#if !defined(__EMSCRIPTEN__) && LLVM_VERSION_MAJOR != 8
-    // The unresolved `fn` makes the JIT lookup of the cell fail.
-    bool linked = false;
-    try {
-        r = e.evaluate2("c()");
-        linked = r.ok;
-    } catch (const LCompilers::LCompilersException &ex) {
-        std::string msg = ex.msg();
-        CAPTURE(msg);
-        CHECK(is_jit_symbol_lookup_failure(msg));
-    }
-    CHECK(!linked);
+)").ok);
+#ifndef __EMSCRIPTEN__
+    // In the WASM build an unresolved symbol is instead a JavaScript
+    // "Dynamic linking error" that aborts the process.
+    LCompilers::LocationManager lm;
+    LCompilers::PassManager lpm;
+    lpm.use_default_passes();
+    LCompilers::diag::Diagnostics d;
+    LCompilers::Result<FortranEvaluator::EvalResult> r
+        = e.evaluate("c()", false, lm, lpm, d);
+    CHECK(!r.ok);
+    cu.use_colors = false;
+    CHECK(d.render(lm, cu).find("undefined reference to 'fn'")
+        != std::string::npos);
 #endif
 }
 
@@ -5658,19 +5926,15 @@ external fn
 c = fn() / 2
 end function
 )").ok);
-#if LLVM_VERSION_MAJOR != 8
-    // The unresolved `fn` makes the JIT lookup of the cell fail.
-    bool linked = false;
-    try {
-        r = e.evaluate2("c()");
-        linked = r.ok;
-    } catch (const LCompilers::LCompilersException &ex) {
-        std::string msg = ex.msg();
-        CAPTURE(msg);
-        CHECK(is_jit_symbol_lookup_failure(msg));
-    }
-    CHECK(!linked);
-#endif
+    LCompilers::LocationManager lm;
+    LCompilers::PassManager lpm;
+    lpm.use_default_passes();
+    LCompilers::diag::Diagnostics d;
+    r = e.evaluate("c()", false, lm, lpm, d);
+    CHECK(!r.ok);
+    cu.use_colors = false;
+    CHECK(d.render(lm, cu).find("undefined reference to 'fn'")
+        != std::string::npos);
 #endif
 }
 
@@ -6188,6 +6452,151 @@ end module
     CHECK(e.evaluate2(cell).ok);
     // again, so the second cell is built on the duplicated scope
     CHECK(e.evaluate2(cell).ok);
+}
+
+TEST_CASE("FortranEvaluator a cell declaring an enum") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LFORTRAN_BUILD_RUNTIME_DIR;
+    FortranEvaluator e(cu);
+    const char *cell = R"(module m_enum
+implicit none
+enum, bind(c)
+    enumerator :: a = 1, b
+end enum
+end module
+)";
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2(cell);
+    CHECK(r.ok);
+    r = e.evaluate2(cell);
+    CHECK(r.ok);
+    r = e.evaluate2("use m_enum");
+    CHECK(r.ok);
+    r = e.evaluate2("a + 10*b");
+    CHECK(r.ok);
+    CHECK(r.result.type == FortranEvaluator::EvalResult::integer4);
+    CHECK(r.result.i32 == 21);
+    // An enumeration declared by the cell itself
+    r = e.evaluate2(R"(enum, bind(c)
+    enumerator :: c, d
+end enum
+)");
+    CHECK(r.ok);
+    r = e.evaluate2("c + 10*d");
+    CHECK(r.ok);
+    CHECK(r.result.type == FortranEvaluator::EvalResult::integer4);
+    CHECK(r.result.i32 == 10);
+}
+
+TEST_CASE("FortranEvaluator copied enumerator imports name the copied enum") {
+    using namespace LCompilers;
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LFORTRAN_BUILD_RUNTIME_DIR;
+    FortranEvaluator e(cu);
+    LocationManager lm;
+    diag::Diagnostics diagnostics;
+    // The enumerators are imported, as ExternalSymbols naming the enumeration
+    // rather than a module, into the scope holding the enumeration and into
+    // a cell using the module that holds it. Their copies in the snapshot a
+    // cell hands to the next one must name the copied enumeration's members,
+    // not the original ones the ASR passes are given.
+    auto enum_of = [](SymbolTable *scope) -> ASR::Enum_t* {
+        for (auto &item : scope->get_scope()) {
+            if (ASR::is_a<ASR::Enum_t>(*item.second)) {
+                return ASR::down_cast<ASR::Enum_t>(item.second);
+            }
+        }
+        return nullptr;
+    };
+    auto import_of = [](SymbolTable *scope, const char *name)
+            -> ASR::ExternalSymbol_t* {
+        ASR::symbol_t *s = scope->get_symbol(name);
+        REQUIRE(s != nullptr);
+        REQUIRE(ASR::is_a<ASR::ExternalSymbol_t>(*s));
+        return ASR::down_cast<ASR::ExternalSymbol_t>(s);
+    };
+    auto module_of = [](SymbolTable *scope) -> ASR::Module_t* {
+        ASR::symbol_t *s = scope->get_symbol("m_enum");
+        REQUIRE(s != nullptr);
+        REQUIRE(ASR::is_a<ASR::Module_t>(*s));
+        return ASR::down_cast<ASR::Module_t>(s);
+    };
+    // An enumeration in a module
+    auto r = e.get_asr2(R"(module m_enum
+implicit none
+enum, bind(c)
+    enumerator :: a = 1, b
+end enum
+end module
+)", lm, diagnostics);
+    REQUIRE(r.ok);
+    // A cell using the module
+    r = e.get_asr2("use m_enum", lm, diagnostics);
+    REQUIRE(r.ok);
+    // An enumeration declared by the cell itself
+    r = e.get_asr2(R"(enum, bind(c)
+    enumerator :: c, d
+end enum
+)", lm, diagnostics);
+    REQUIRE(r.ok);
+    r = e.get_asr2("integer :: unused", lm, diagnostics);
+    REQUIRE(r.ok);
+    // The snapshot of the three earlier cells, newest first
+    SymbolTable *enum_cell = r.result->m_symtab->parent;
+    SymbolTable *use_cell = enum_cell->parent;
+    SymbolTable *module_cell = use_cell->parent;
+
+    ASR::Module_t *m = module_of(module_cell);
+    ASR::Enum_t *m_enum = enum_of(m->m_symtab);
+    REQUIRE(m_enum != nullptr);
+    CHECK(import_of(m->m_symtab, "a")->m_external
+        == m_enum->m_symtab->get_symbol("a"));
+    CHECK(import_of(m->m_symtab, "b")->m_external
+        == m_enum->m_symtab->get_symbol("b"));
+    CHECK(import_of(use_cell, "a")->m_external
+        == m_enum->m_symtab->get_symbol("a"));
+    CHECK(import_of(use_cell, "b")->m_external
+        == m_enum->m_symtab->get_symbol("b"));
+
+    ASR::Enum_t *cell_enum = enum_of(enum_cell);
+    REQUIRE(cell_enum != nullptr);
+    CHECK(import_of(enum_cell, "c")->m_external
+        == cell_enum->m_symtab->get_symbol("c"));
+    CHECK(import_of(enum_cell, "d")->m_external
+        == cell_enum->m_symtab->get_symbol("d"));
+}
+
+TEST_CASE("FortranEvaluator a cell declaring a union") {
+    CompilerOptions cu;
+    cu.interactive = true;
+    cu.po.runtime_library_dir = LFORTRAN_BUILD_RUNTIME_DIR;
+    FortranEvaluator e(cu);
+    const char *cell = R"(module m_union
+implicit none
+_lfortran_union_type :: u_t
+    integer :: x
+    real :: r
+end _lfortran_union_type
+end module
+)";
+    LCompilers::Result<FortranEvaluator::EvalResult> r = e.evaluate2(cell);
+    CHECK(r.ok);
+    r = e.evaluate2(cell);
+    CHECK(r.ok);
+    // A later cell declares an entity of the copied union type
+    r = e.evaluate2(R"(integer function f()
+use m_union
+type(u_t) :: u
+u%x = 7
+f = u%x
+end function
+)");
+    CHECK(r.ok);
+    r = e.evaluate2("f()");
+    CHECK(r.ok);
+    CHECK(r.result.type == FortranEvaluator::EvalResult::integer4);
+    CHECK(r.result.i32 == 7);
 }
 
 TEST_CASE("FortranEvaluator re-run a cell declaring an operator") {
@@ -6747,6 +7156,375 @@ TEST_CASE("FortranEvaluator execute: results and cells") {
         != std::string::npos);
 }
 
+#ifndef __EMSCRIPTEN__
+// The WASM build does not look for undefined references, and a call that
+// needs one aborts the process, so these are native only.
+TEST_CASE("FortranEvaluator execute: undefined procedure") {
+    // A procedure that is never defined is a user error, like an undefined
+    // reference at link time. A cell that only defines procedures may refer
+    // to one that a later cell defines, so it is found when a cell is to run
+    // code that needs it. That cell then leaves no trace, and the session
+    // continues (#17046).
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    auto cell = e.execute(R"(integer function c()
+interface
+    integer function nothere()
+    end function
+end interface
+c = nothere()
+end function
+)");
+    REQUIRE(cell.ok);
+    // Calling it is an ordinary error, every time.
+    for (int i = 0; i < 2; i++) {
+        cell = e.execute("c()");
+        CHECK(!cell.ok);
+        CHECK(!cell.internal_error);
+        CHECK(cell.error_name == "CompilerError");
+        CHECK(cell.error_value.find("undefined reference to 'nothere'")
+            != std::string::npos);
+        CHECK(cell.error_traceback.empty());
+    }
+    // A cell that does not need the procedure still runs.
+    cell = e.execute("40 + 2");
+    REQUIRE(cell.ok);
+    CHECK(cell.value.text() == "42");
+    // A procedure defined in the same cell is linked with it, so calling
+    // it is the same error; one defined in another cell is not affected.
+    REQUIRE(e.execute(R"(integer function c2()
+interface
+    integer function nothere()
+    end function
+end interface
+c2 = nothere()
+end function
+integer function good()
+good = 7
+end function
+)").ok);
+    REQUIRE(e.execute(R"(integer function other()
+other = 5
+end function
+)").ok);
+    for (int i = 0; i < 2; i++) {
+        cell = e.execute("good()");
+        CHECK(!cell.ok);
+        CHECK(!cell.internal_error);
+        CHECK(cell.error_value.find("undefined reference to 'nothere'")
+            != std::string::npos);
+        cell = e.execute("other()");
+        REQUIRE(cell.ok);
+        CHECK(cell.value.text() == "5");
+    }
+    // The procedure can be defined again, correctly.
+    REQUIRE(e.execute(R"(integer function c()
+c = 9
+end function
+)").ok);
+    cell = e.execute("c() + other()");
+    REQUIRE(cell.ok);
+    CHECK(cell.value.text() == "14");
+    // When the cell that defines the caller also runs it, nothing of it
+    // runs and nothing of it is defined.
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    cell = e.execute(R"(subroutine s_17046()
+interface
+    subroutine nothere2()
+    end subroutine
+end interface
+call nothere2()
+end subroutine
+print *, "not printed"
+call s_17046()
+)", false, io);
+    CHECK(!cell.ok);
+    CHECK(!cell.internal_error);
+    CHECK(cell.error_value.find("undefined reference to 'nothere2'")
+        != std::string::npos);
+    CHECK(output.find("not printed") == std::string::npos);
+    cell = e.execute("call s_17046()");
+    CHECK(!cell.ok);
+    CHECK(!cell.internal_error);
+    CHECK(cell.error_value.find("'s_17046' not found") != std::string::npos);
+    // The next cell takes the rejected cell's place, so its procedure gets
+    // the same mangled name, which must not count as already defined.
+    REQUIRE(e.execute(R"(subroutine s_17046()
+print *, "s_17046 defined"
+end subroutine
+)").ok);
+    output.clear();
+    cell = e.execute("call s_17046()", false, io);
+    REQUIRE(cell.ok);
+    CHECK(output.find("s_17046 defined") != std::string::npos);
+    cell = e.execute("6 * 7");
+    REQUIRE(cell.ok);
+    CHECK(cell.value.text() == "42");
+}
+
+TEST_CASE("FortranEvaluator execute: bind(C) procedure defined after its caller") {
+    // A bind(C) name is not specific to a cell, so a procedure that a later
+    // cell defines with it satisfies an earlier caller.
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    REQUIRE(e.execute(R"(subroutine a()
+interface
+subroutine b() bind(C, name="bfun")
+end subroutine
+end interface
+call b()
+end subroutine
+)").ok);
+    REQUIRE(e.execute(R"(subroutine b() bind(C, name="bfun")
+print *, "in b"
+end subroutine
+)").ok);
+    auto cell = e.execute("call a()", false, io);
+    REQUIRE(cell.ok);
+    CHECK(output.find("in b") != std::string::npos);
+
+    output.clear();
+    REQUIRE(e.execute(R"(subroutine a2()
+interface
+integer(4) function g(x) bind(C, name="gfun")
+integer(4), value :: x
+end function
+end interface
+print *, g(3)
+end subroutine
+)").ok);
+    REQUIRE(e.execute(R"(integer(4) function g(x) bind(C, name="gfun")
+integer(4), value :: x
+g = 2*x
+end function
+)").ok);
+    cell = e.execute("call a2()", false, io);
+    REQUIRE(cell.ok);
+    CHECK(output.find("6") != std::string::npos);
+}
+
+TEST_CASE("FortranEvaluator execute: bind(C) procedure defined after a failed call") {
+    // Calling a procedure whose bind(C) callee is not defined yet is an
+    // ordinary error that leaves the session as it was: once the callee is
+    // defined, the call works (#17046).
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    REQUIRE(e.execute(R"(subroutine a()
+interface
+subroutine b() bind(C, name="bfun_17046")
+end subroutine
+end interface
+call b()
+end subroutine
+integer function sibling()
+sibling = 3
+end function
+)").ok);
+    for (int i = 0; i < 2; i++) {
+        auto cell = e.execute("call a()", false, io);
+        CHECK(!cell.ok);
+        CHECK(!cell.internal_error);
+        CHECK(cell.error_value.find("undefined reference to 'bfun_17046'")
+            != std::string::npos);
+        cell = e.execute("sibling()");
+        CHECK(!cell.ok);
+        CHECK(!cell.internal_error);
+        CHECK(cell.error_value.find("undefined reference to 'bfun_17046'")
+            != std::string::npos);
+    }
+    CHECK(output.empty());
+    REQUIRE(e.execute(R"(subroutine b() bind(C, name="bfun_17046")
+print *, "in b"
+end subroutine
+)").ok);
+    auto cell = e.execute("call a()", false, io);
+    REQUIRE(cell.ok);
+    CHECK(output.find("in b") != std::string::npos);
+    cell = e.execute("sibling()");
+    REQUIRE(cell.ok);
+    CHECK(cell.value.text() == "3");
+}
+
+TEST_CASE("FortranEvaluator execute: common block and a deferred bind(C) callee") {
+    // Every later cell declares the common block of the waiting procedure
+    // without using it, so it does not need that procedure's callee (#17046).
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    REQUIRE(e.execute(R"(subroutine a()
+real :: x
+common /blk/ x
+interface
+subroutine b() bind(C, name="cfun_17046")
+end subroutine
+end interface
+x = 1
+call b()
+end subroutine
+)").ok);
+    auto cell = e.execute("40+2");
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(cell.value.text() == "42");
+    REQUIRE(e.execute("integer :: k").ok);
+    REQUIRE(e.execute("k = 5").ok);
+    cell = e.execute("k");
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(cell.value.text() == "5");
+    cell = e.execute(R"(subroutine b() bind(C, name="cfun_17046")
+print *, "in b"
+end subroutine
+call a()
+)", false, io);
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(output.find("in b") != std::string::npos);
+}
+
+TEST_CASE("FortranEvaluator execute: redefined broken bind(C) procedure") {
+    // The JIT keeps the first definition of a bind(C) procedure, so a cell
+    // that defines it again and calls it needs the first one (#17046).
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    REQUIRE(e.execute(R"(subroutine b() bind(C, name="rfun_17046")
+interface
+subroutine nothere_17046()
+end subroutine
+end interface
+call nothere_17046()
+end subroutine
+)").ok);
+    for (int i = 0; i < 2; i++) {
+        auto cell = e.execute(R"(subroutine b() bind(C, name="rfun_17046")
+print *, "fixed"
+end subroutine
+call b()
+)");
+        CHECK(!cell.ok);
+        CHECK(!cell.internal_error);
+        CHECK(cell.error_value.find("undefined reference to 'nothere_17046'")
+            != std::string::npos);
+    }
+    auto cell = e.execute("40+2");
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(cell.value.text() == "42");
+}
+
+TEST_CASE("FortranEvaluator execute: type info shared with a broken procedure") {
+    // The type information that select type uses is defined in every cell
+    // that needs it, and the JIT keeps the first definition, so a procedure
+    // of a later cell needs the module of the broken one (#17046).
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    REQUIRE(e.execute(R"(subroutine s(x)
+class(*), intent(in) :: x
+interface
+subroutine nothere_17046()
+end subroutine
+end interface
+select type (x)
+type is (integer)
+print *, x
+end select
+call nothere_17046()
+end subroutine
+)").ok);
+    REQUIRE(e.execute(R"(subroutine t(y)
+class(*), intent(in) :: y
+select type (y)
+type is (integer)
+print *, y + 1
+end select
+end subroutine
+)").ok);
+    for (int i = 0; i < 2; i++) {
+        auto cell = e.execute("call t(5)");
+        CHECK(!cell.ok);
+        CHECK(!cell.internal_error);
+        CHECK(cell.error_value.find("undefined reference to 'nothere_17046'")
+            != std::string::npos);
+    }
+    auto cell = e.execute("40+2");
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(cell.value.text() == "42");
+}
+
+TEST_CASE("FortranEvaluator execute: earlier procedures after a rejected cell") {
+    // The passes of a rejected cell rewrite the earlier cells' procedures in
+    // place, so the session goes back to the copy of them taken before: an
+    // optional argument may still be omitted, and a function returning a
+    // deferred-length character is still a function (#17046).
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    REQUIRE(e.execute(R"(subroutine opt(a, b)
+integer, intent(in) :: a
+integer, intent(in), optional :: b
+if (present(b)) then
+    print *, "ab", a, b
+else
+    print *, "a", a
+end if
+end subroutine
+)").ok);
+    REQUIRE(e.execute(R"(subroutine w()
+interface
+subroutine nothere_17046()
+end subroutine
+end interface
+call nothere_17046()
+end subroutine
+)").ok);
+    auto cell = e.execute("call w()");
+    CHECK(!cell.ok);
+    CHECK(!cell.internal_error);
+    CHECK(cell.error_value.find("undefined reference to 'nothere_17046'")
+        != std::string::npos);
+    cell = e.execute("call opt(2)", false, io);
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    cell = e.execute("call opt(3, 4)", false, io);
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(output.find("a 2") != std::string::npos);
+    CHECK(output.find("ab 3 4") != std::string::npos);
+
+    output.clear();
+    REQUIRE(e.execute(R"(function cf() result(r)
+character(len=:), allocatable :: r
+interface
+subroutine bl() bind(C, name="dfun_17046")
+end subroutine
+end interface
+call bl()
+r = "cf"
+end function
+)").ok);
+    cell = e.execute("print *, cf()", false, io);
+    CHECK(!cell.ok);
+    CHECK(!cell.internal_error);
+    CHECK(cell.error_value.find("undefined reference to 'dfun_17046'")
+        != std::string::npos);
+    REQUIRE(e.execute(R"(subroutine b() bind(C, name="dfun_17046")
+print *, "in b"
+end subroutine
+)").ok);
+    cell = e.execute("print *, cf()", false, io);
+    REQUIRE_MESSAGE(cell.ok, cell.error_text());
+    CHECK(output.find("in b") != std::string::npos);
+    CHECK(output.find("cf") != std::string::npos);
+}
+
+#endif // __EMSCRIPTEN__
+
 TEST_CASE("FortranEvaluator execute: formatted print of an array section") {
     // The items of an array section share one format, as in a compiled
     // program (#16712).
@@ -7150,6 +7928,96 @@ static void run_cell(FortranEvaluator &e, const std::string &code,
     CAPTURE(code);
     REQUIRE_MESSAGE(cell.ok, cell.error_text());
 }
+
+// These hang on Windows, as does any call of an earlier cell's procedure that
+// takes a polymorphic argument, see
+// https://github.com/lfortran/lfortran/issues/12494.
+#ifndef _WIN32
+// The module of a type with defined output, and the code that writes a value
+// of that type with it, in separate cells (#17915).
+TEST_CASE("FortranEvaluator execute: defined output in a later cell") {
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    run_cell(e, R"(module dm_17915
+implicit none
+type :: shown
+    integer :: n
+contains
+    procedure :: show
+    generic :: write(formatted) => show
+end type
+contains
+subroutine show(dtv, unit, iotype, v_list, iostat, iomsg)
+    class(shown), intent(in) :: dtv
+    integer, intent(in) :: unit
+    character(*), intent(in) :: iotype
+    integer, intent(in) :: v_list(:)
+    integer, intent(out) :: iostat
+    character(*), intent(inout) :: iomsg
+    write(unit, '(a,i0)', iostat=iostat) 'n=', dtv%n
+end subroutine
+end module
+)", io);
+    run_cell(e, "use dm_17915\nprint '(dt)', shown(3)", io);
+    CHECK(output == "n=3\n");
+    output.clear();
+    run_cell(e, "type(shown) :: x", io);
+    run_cell(e, "x%n = 4\nwrite(*, '(dt)') x", io);
+    CHECK(output == "n=4\n");
+}
+
+// A module procedure, and an external subroutine of a later cell, that write a
+// value with defined output, called from later cells (#17916).
+TEST_CASE("FortranEvaluator execute: module procedure with defined output") {
+    CompilerOptions cu = execute_options();
+    FortranEvaluator e(cu);
+    std::string output;
+    FortranEvaluator::CellIO io;
+    io.output = [&](int, const std::string &text) { output += text; };
+    run_cell(e, R"(module dm_17916
+implicit none
+type :: shown
+    integer :: n
+contains
+    procedure :: show
+    generic :: write(formatted) => show
+end type
+contains
+subroutine show(dtv, unit, iotype, v_list, iostat, iomsg)
+    class(shown), intent(in) :: dtv
+    integer, intent(in) :: unit
+    character(*), intent(in) :: iotype
+    integer, intent(in) :: v_list(:)
+    integer, intent(out) :: iostat
+    character(*), intent(inout) :: iomsg
+    write(unit, '(a,i0)', iostat=iostat) 'n=', dtv%n
+end subroutine
+subroutine p(n)
+integer, intent(in) :: n
+print '(dt)', shown(n)
+end subroutine
+end module
+)", io);
+    run_cell(e, "use dm_17916", io);
+    run_cell(e, "call p(3)", io);
+    CHECK(output == "n=3\n");
+    output.clear();
+    run_cell(e, "call p(5)", io);
+    CHECK(output == "n=5\n");
+    output.clear();
+    run_cell(e, R"(subroutine q(y)
+use dm_17916
+type(shown), intent(in) :: y
+print '(dt)', y
+end subroutine
+)", io);
+    run_cell(e, "call q(shown(7))", io);
+    CHECK(output == "n=7\n");
+}
+#endif
 
 #ifndef _WIN32
 // The cell runs on a thread of its own while the caller passes its output on.
@@ -10018,4 +10886,38 @@ TEST_CASE("FortranEvaluator cell symbols: both spellings of a name agree")
     REQUIRE(e.evaluate2("mixedcase = 1").ok);
     CHECK(e.cell_symbols().uses.count(declared) == 1);
     CHECK(e.cell_symbols().assigns.count(declared) == 1);
+}
+
+TEST_CASE("FortranEvaluator a procedure cell allocates a notebook array") {
+    // A variable declared by a cell outlives the procedure or the cell that
+    // allocates it, so --fast must not turn it into a fixed-size array.
+    for (bool fast : {false, true}) {
+        CAPTURE(fast);
+        CompilerOptions cu;
+        cu.interactive = true;
+        cu.po.fast = fast;
+        cu.po.runtime_library_dir = LCompilers::LFortran::get_runtime_library_dir();
+        FortranEvaluator e(cu);
+        REQUIRE(e.evaluate2("integer, allocatable :: a(:)\n").ok);
+        REQUIRE(e.evaluate2(R"(subroutine init_array()
+    allocate(a(3))
+    a = 7
+end subroutine
+)").ok);
+        REQUIRE(e.evaluate2("call init_array()\n").ok);
+        LCompilers::Result<FortranEvaluator::EvalResult> r
+            = e.evaluate2("size(a)\n");
+        REQUIRE(r.ok);
+        CHECK(r.result.i32 == 3);
+        r = e.evaluate2("sum(a)\n");
+        REQUIRE(r.ok);
+        CHECK(r.result.i32 == 21);
+
+        // The allocation is a statement cell.
+        REQUIRE(e.evaluate2("integer, allocatable :: b(:)\n").ok);
+        REQUIRE(e.evaluate2("allocate(b(4))\n").ok);
+        r = e.evaluate2("size(b)\n");
+        REQUIRE(r.ok);
+        CHECK(r.result.i32 == 4);
+    }
 }

@@ -6,6 +6,8 @@ namespace LCompilers {
 // Metal Shading Language. The spellings the shared device code generator
 // asks a dialect for; everything else it derives from the ASR itself.
 struct MetalDialect {
+    bool needs_dp4a = false;
+
     std::string addr_space(ASR::memory_spaceType space) const {
         switch (space) {
             case ASR::memory_spaceType::Global: return "device";
@@ -34,6 +36,17 @@ struct MetalDialect {
     void emit_prologue(std::stringstream &src) const {
         src << "#include <metal_stdlib>\n";
         src << "using namespace metal;\n\n";
+        if (needs_dp4a) {
+            // Unsigned accumulation preserves the CUDA operation's wrapping.
+            src << "inline int __dp4a(int a, int b, int c) {\n"
+                   "    int4 x = int4(as_type<char4>(a));\n"
+                   "    int4 y = int4(as_type<char4>(b));\n"
+                   "    int4 products = x * y;\n"
+                   "    uint result = as_type<uint>(c) + uint(products.x)\n"
+                   "        + uint(products.y) + uint(products.z) + uint(products.w);\n"
+                   "    return as_type<int>(result);\n"
+                   "}\n\n";
+        }
     }
 
     std::string device_fn_qualifier() const {
@@ -41,7 +54,7 @@ struct MetalDialect {
     }
 
     std::string kernel_qualifier(int64_t /*threads_per_block*/,
-            bool /*few_blocks*/, bool = false) const {
+            bool /*few_blocks*/, int64_t = 0) const {
         return "kernel void ";
     }
 
@@ -78,11 +91,17 @@ struct MetalDialect {
     // capabilities give), and the threads of a threadgroup fill its
     // SIMD-groups in order.
     void emit_lane_prologue(std::stringstream &src, const std::string &indent,
-            const std::string &lanes) const {
+            const std::string &lanes, int64_t /*fixed_lanes*/ = 0) const {
         src << indent << "uint __thread_id = __gpu_grid_thread / (uint)"
             << lanes << ";\n";
         src << indent << "int __gpu_lane = (int)(__gpu_grid_thread % (uint)"
             << lanes << ");\n";
+    }
+
+    // Consecutive combinations over the lanes of a threadgroup each take
+    // their own barrier (asr_to_gpu_c.h, emit_stmts).
+    bool batched_block_reduce() const {
+        return false;
     }
 
     std::string lane_index() const { return "__gpu_lane"; }
@@ -102,12 +121,26 @@ struct MetalDialect {
         return std::string(names[op]) + "(" + value + ")";
     }
     std::string lane_reduce_helper() const { return ""; }
+    // Metal has no lowering of a reduction of an array on the device
+    // (GpuDeviceCapabilities::array_reductions), so the offload pass
+    // declines such a loop before a kernel is built.
+    std::string reduce_combine_helper() const { return ""; }
+    void emit_reduce_combine(std::stringstream &, const std::string &,
+            const std::vector<GpuReduceCombineItem> &, const std::string &,
+            const std::string &, bool) const {
+        throw CodeGenError("gpu offload: Metal has no lowering of a "
+            "reduction of an array");
+    }
+    std::string common_lanes_test(const std::string &, int64_t) const {
+        return "";
+    }
     std::string unroll_wide_pragma(bool = false) const { return unroll_pragma(); }
     // Reached only on a device that has wide loads (gpu_wide_loads.cpp).
     std::string wide_load(const std::string &indent,
             const std::vector<std::string> &targets,
             const std::string &source, const std::string &/*array*/,
-            const std::string &/*aligned*/, bool /*assume*/) const {
+            const std::string &/*aligned*/, bool /*assume*/,
+            bool /*pinned*/) const {
         std::string out;
         for (size_t i = 0; i < targets.size(); i++) {
             out += indent + targets[i] + " = (&(" + source + "))["
@@ -191,7 +224,10 @@ struct MetalDialect {
 Result<std::string> asr_to_metal(Allocator & /*al*/, ASR::TranslationUnit_t &asr,
     diag::Diagnostics &diagnostics, CompilerOptions &co)
 {
-    ASRToGpuCVisitor<MetalDialect> v(co);
+    MetalDialect dialect;
+    // The idiom pass creates this global interface only after a match.
+    dialect.needs_dp4a = asr.m_symtab->get_symbol("__dp4a") != nullptr;
+    ASRToGpuCVisitor<MetalDialect> v(co, dialect);
     try {
         v.visit_TranslationUnit(asr);
     } catch (const CodeGenError &e) {

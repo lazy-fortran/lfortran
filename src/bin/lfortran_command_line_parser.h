@@ -41,6 +41,7 @@ namespace LCompilers::CommandLineInterface {
         bool show_ast_f90 = false;
         std::string arg_pass;
         bool arg_no_color = false;
+        std::string arg_color = "auto";
         bool arg_runtime_color = false;
         bool arg_no_indent = false;
         bool arg_no_prescan = false;
@@ -67,6 +68,8 @@ namespace LCompilers::CommandLineInterface {
         std::string linker{""};
         std::string linker_path{""};
         bool print_targets = false;
+        bool clean_temp = false;
+        bool save_temps = false;
         bool print_c_include_dir = false;
         bool fixed_form_infer = false;
         bool cpp = false;

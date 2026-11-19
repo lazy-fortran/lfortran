@@ -2891,8 +2891,8 @@ public:
             m_values = r->m_values; n_values = r->n_values;
         }
 
-        ASR::expr_t *a_unit, *a_fmt, *a_iomsg, *a_iostat, *a_size, *a_id, *a_separator, *a_end, *a_fmt_constant, *a_advance, *a_pos, *a_rec, *a_pad, *a_asynchronous, *a_decimal;
-        a_unit = a_fmt = a_iomsg = a_iostat = a_size = a_id = a_separator = a_end = a_fmt_constant = a_advance = a_pos = a_rec = a_pad = a_asynchronous = a_decimal = nullptr;
+        ASR::expr_t *a_unit, *a_fmt, *a_iomsg, *a_iostat, *a_size, *a_id, *a_separator, *a_end, *a_fmt_constant, *a_advance, *a_pos, *a_rec, *a_pad, *a_asynchronous, *a_decimal, *a_delim;
+        a_unit = a_fmt = a_iomsg = a_iostat = a_size = a_id = a_separator = a_end = a_fmt_constant = a_advance = a_pos = a_rec = a_pad = a_asynchronous = a_decimal = a_delim = nullptr;
         ASR::stmt_t *overloaded_stmt = nullptr;
         ASR::symbol_t *a_nml = nullptr;
         std::string read_write = "";
@@ -3235,6 +3235,7 @@ public:
                 }
                 this->visit_expr(*kwarg.m_value);
                 a_size = ASRUtils::EXPR(tmp);
+                check_io_specifier_is_variable(a_size, "size");
                 ASR::ttype_t* a_size_type = ASRUtils::expr_type(a_size);
                 if( a_size->type != ASR::exprType::Var ||
                     (!ASR::is_a<ASR::Integer_t>(*ASRUtils::type_get_past_pointer(a_size_type))) ) {
@@ -3396,7 +3397,7 @@ public:
                         body.push_back(al, ASRUtils::STMT(
                             ASR::make_FileWrite_t(al, loc, 0, a_unit,
                             nullptr, nullptr, nullptr,
-                            nullptr, 0, nullptr, newline, nullptr, formatted, a_nml, a_rec, nullptr, a_asynchronous, a_decimal)));
+                            nullptr, 0, nullptr, newline, nullptr, formatted, a_nml, a_rec, nullptr, a_asynchronous, a_decimal, nullptr)));
                         newline_for_advance.push_back(ASR::make_If_t(al, loc, nullptr, test, body.p,
                                 body.size(), nullptr, 0));
                     }
@@ -3556,7 +3557,44 @@ public:
                         }));
                     throw SemanticAbort();
                 }
+            } else if (m_arg_str == std::string("delim")) {
+                // delim= applies to output. A read that names it stays ignored.
+                if (_type != AST::decl_stmtType::Write) {
+                    continue;
+                }
+                if (a_delim != nullptr) {
+                    diag.add(Diagnostic(
+                        R"""(Duplicate value of `delim` found)""",
+                        Level::Error, Stage::Semantic, {
+                            Label("", {loc})
+                        }));
+                    throw SemanticAbort();
+                }
+                if (kwarg.m_value == nullptr) {
+                    diag.add(Diagnostic(
+                        "`delim` must be a scalar character",
+                        Level::Error, Stage::Semantic, {
+                            Label("", {loc})
+                        }));
+                    throw SemanticAbort();
+                }
+                this->visit_expr(*kwarg.m_value);
+                a_delim = ASRUtils::EXPR(tmp);
+                ASR::ttype_t *a_delim_type = ASRUtils::expr_type(a_delim);
+                if (!ASRUtils::is_character(*a_delim_type)
+                        || ASRUtils::is_array(a_delim_type)) {
+                    diag.add(Diagnostic(
+                        "`delim` must be a scalar character",
+                        Level::Error, Stage::Semantic, {
+                            Label("", {kwarg.m_value->base.loc})
+                        }));
+                    throw SemanticAbort();
+                }
             }
+        }
+        if (a_unit && ASRUtils::is_character(*ASRUtils::expr_type(a_unit))) {
+            check_io_variable_not_named_constant(a_unit,
+                "internal file must be a variable, not a named constant");
         }
         if (a_rec && a_unit && ASRUtils::is_character(*ASRUtils::expr_type(a_unit))) {
             diag.add(Diagnostic(
@@ -3618,6 +3656,8 @@ public:
             this->visit_expr(*m_values[i]);
             ASR::expr_t* expr = ASRUtils::EXPR(tmp);
             check_io_item_not_function(expr);
+            check_io_item_not_named_constant(expr,
+                _type == AST::decl_stmtType::Read);
             if (_type == AST::decl_stmtType::Write) {
                 expr = cast_assumed_rank_io_item(expr, loc, "write");
             } else if (_type == AST::decl_stmtType::Read) {
@@ -3992,7 +4032,7 @@ public:
             if (format_statements.find(label) == format_statements.end()) {
                 if (_type == AST::decl_stmtType::Write) {
                     tmp = ASR::make_FileWrite_t(al, loc, m_label, a_unit, a_iomsg, a_iostat,
-                        a_id, a_values_vec.p, a_values_vec.size(), a_separator, a_end, nullptr, true, a_nml, a_rec, a_pos, a_asynchronous, a_decimal);
+                        a_id, a_values_vec.p, a_values_vec.size(), a_separator, a_end, nullptr, true, a_nml, a_rec, a_pos, a_asynchronous, a_decimal, a_delim);
                     print_statements[tmp] = std::make_pair(&w->base, label);
                     if (dtio_bindings.size() > 0) {
                         format_label_dtio[tmp] = std::make_pair(dtio_bindings, dtio_unit);
@@ -4053,7 +4093,7 @@ public:
             separate_leading_blank = list_directed_leading_blank;
             tmp = ASR::make_FileWrite_t(al, loc, m_label, a_unit,
             a_iomsg, a_iostat, a_id, a_values_vec.p,
-            a_values_vec.size(), a_separator, a_end, overloaded_stmt, formatted, a_nml, nullptr, a_pos, a_asynchronous, a_decimal);
+            a_values_vec.size(), a_separator, a_end, overloaded_stmt, formatted, a_nml, nullptr, a_pos, a_asynchronous, a_decimal, a_delim);
         } else if ( _type == AST::decl_stmtType::Write ) { // If not the previous case, Wrap everything in stringFormat.
             if (formatted) {
                 ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_Allocatable_t(al, loc,
@@ -4072,7 +4112,7 @@ public:
             }
             tmp = ASR::make_FileWrite_t(al, loc, m_label, a_unit,
                 a_iomsg, a_iostat, a_id, a_values_vec.p,
-                a_values_vec.size(), a_separator, a_end, overloaded_stmt, formatted, a_nml, a_rec, a_pos, a_asynchronous, a_decimal);
+                a_values_vec.size(), a_separator, a_end, overloaded_stmt, formatted, a_nml, a_rec, a_pos, a_asynchronous, a_decimal, a_delim);
         } else if( _type == AST::decl_stmtType::Read ) {
             if (formatted && a_fmt_constant) {
                 // For READ, do not wrap values in StringFormat (which is for
@@ -4199,6 +4239,8 @@ public:
         std::string node_name = "Rewind";
         fill_args_for_rewind_inquire_flush(x, 4, args, 4, argname2idx, node_name);
         ASR::expr_t *unit = args[0], *iostat = args[1], *err = args[2], *iomsg = args[3];
+        check_io_specifier_is_variable(iostat, "iostat");
+        check_io_specifier_is_variable(iomsg, "iomsg");
         tmp = ASR::make_FileRewind_t(al, x.base.base.loc, x.m_label, unit, iostat, err, iomsg);
     }
 
@@ -4209,6 +4251,8 @@ public:
         std::string node_name = "Endfile";
         fill_args_for_rewind_inquire_flush(x, 4, args, 4, argname2idx, node_name);
         ASR::expr_t *unit = args[0], *iostat = args[1], *iomsg  = args[2], *err = args[3];
+        check_io_specifier_is_variable(iostat, "iostat");
+        check_io_specifier_is_variable(iomsg, "iomsg");
         tmp = ASR::make_FileEndfile_t(al, x.base.base.loc, x.m_label, unit, iostat, iomsg, err);
     }
 
@@ -4341,12 +4385,19 @@ public:
                     ASR::symbol_t *resolved = ASRUtils::symbol_get_past_external(sym);
                     if (!ASR::is_a<ASR::Variable_t>(*resolved)) return false;
                     ASR::Variable_t *v = ASR::down_cast<ASR::Variable_t>(resolved);
+                    // Outside its module and that module's descendants, a
+                    // nonpointer PROTECTED variable is not definable (F2018
+                    // 8.5.15); a submodule is a descendant.
+                    ASR::Module_t *owner = ASRUtils::get_sym_module0(resolved);
+                    bool protected_here = sym != resolved && v->m_is_protected
+                        && !ASRUtils::is_pointer(v->m_type)
+                        && !(owner != nullptr
+                            && is_scope_in_module(current_scope, owner->m_name));
                     return v->m_storage != ASR::storage_typeType::Parameter
                         && !selector_has_constant_or_non_definable_base(expr)
                         && (v->m_intent != ASR::intentType::In
                             || ASRUtils::is_pointer(v->m_type))
-                        && !(sym != resolved && v->m_is_protected
-                            && !ASRUtils::is_pointer(v->m_type));
+                        && !protected_here;
                 }
                 case ASR::exprType::StringItem:
                     return self(self, ASR::down_cast<ASR::StringItem_t>(expr)->m_arg);
@@ -4387,6 +4438,24 @@ public:
                 diag.add(Diagnostic("delim in inquire must be a definable variable",
                     Level::Error, Stage::Semantic, {
                         Label("", {delim->base.loc})
+                    }));
+                throw SemanticAbort();
+            }
+        }
+        // Every specifier but UNIT=, FILE= and ERR= is a variable that the
+        // statement defines (F2018 12.10.2); DELIM=, SIZE= and POS= are
+        // checked separately.
+        for (size_t i = 0; i < x.n_kwargs; i++) {
+            std::string spec = to_lower(x.m_kwargs[i].m_arg);
+            if (spec == "unit" || spec == "file" || spec == "err"
+                    || spec == "delim" || spec == "size" || spec == "pos") {
+                continue;
+            }
+            ASR::expr_t *arg = args[argname2idx[spec]];
+            if (arg && !is_definable(is_definable, arg)) {
+                diag.add(Diagnostic(spec + " in inquire must be a definable variable",
+                    Level::Error, Stage::Semantic, {
+                        Label("", {arg->base.loc})
                     }));
                 throw SemanticAbort();
             }
@@ -4510,6 +4579,8 @@ public:
             throw SemanticAbort();
         }
         ASR::expr_t *unit = args[0], *err = args[1], *iomsg = args[2], *iostat = args[3];
+        check_io_specifier_is_variable(iostat, "iostat");
+        check_io_specifier_is_variable(iomsg, "iomsg");
         tmp = ASR::make_Flush_t(al, x.base.base.loc, x.m_label, unit, err, iomsg, iostat);
     }
 
@@ -9200,7 +9271,23 @@ public:
                         // ArrayConstant (real(10), complex(10)).
                         value = constructor;
                     } else {
+                        ASR::ttype_t *source_type = ac->m_type;
                         ac = ASR::down_cast<ASR::ArrayConstant_t>(ASRUtils::expr_value(constructor));
+                        // The folded array constructor is a rank-1 constant;
+                        // the converted constant keeps the shape of `value`
+                        ASR::dimension_t *source_dims = nullptr;
+                        size_t source_rank = ASRUtils::extract_dimensions_from_ttype(
+                            source_type, source_dims);
+                        if (source_rank > 1) {
+                            ASR::ttype_t *shaped_type = ASRUtils::TYPE(ASR::make_Array_t(al,
+                                ac->base.base.loc, ASRUtils::extract_type(ac->m_type),
+                                source_dims, source_rank,
+                                ASRUtils::extract_physical_type(ac->m_type),
+                                ASR::memory_spaceType::Global));
+                            ac = ASR::down_cast<ASR::ArrayConstant_t>(ASRUtils::EXPR(
+                                ASRUtils::make_ArrayConstant_t_util(al, ac->base.base.loc,
+                                    ac->m_data, shaped_type, ac->m_storage_format)));
+                        }
                         value = ASRUtils::EXPR((ASR::asr_t*) ac);
                         LCOMPILERS_ASSERT(ASRUtils::is_array(ac->m_type));
                         if( ASR::is_a<ASR::Array_t>(*ASRUtils::type_get_past_pointer(
@@ -10971,7 +11058,7 @@ public:
         args.reserve(al, 1);
         args.push_back(al, space);
         return ASR::make_FileWrite_t(al, loc, 0, nullptr, nullptr,
-            nullptr, nullptr, args.p, args.size(), nullptr, empty_string, nullptr, true, nullptr, nullptr, nullptr, nullptr, nullptr);
+            nullptr, nullptr, args.p, args.size(), nullptr, empty_string, nullptr, true, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void check_io_item_not_function(ASR::expr_t *expr) {
@@ -11010,6 +11097,51 @@ public:
             Label("", {expr->base.loc})
         }));
         throw SemanticAbort();
+    }
+
+    // An internal file (F2018 R1203), an input item (R1216) and an
+    // io-implied-do variable (R1220) are variables, which a named constant or
+    // a subobject of one is not.
+    void check_io_variable_not_named_constant(ASR::expr_t *expr,
+            const std::string &message) {
+        if (!ASRUtils::is_named_constant_designator(expr)) {
+            return;
+        }
+        diag.add(Diagnostic(message,
+            Level::Error, Stage::Semantic, {
+            Label("", {expr->base.loc})
+        }));
+        throw SemanticAbort();
+    }
+
+    // An I/O statement defines its IOSTAT=, IOMSG= and SIZE= specifiers, so
+    // each must be a variable.
+    void check_io_specifier_is_variable(ASR::expr_t *expr,
+            const std::string &name) {
+        if (expr == nullptr || ASRUtils::is_variable(expr)) {
+            return;
+        }
+        diag.add(Diagnostic("non-variable expression for `" + name + "`",
+            Level::Error, Stage::Semantic, {
+            Label("", {expr->base.loc})
+        }));
+        throw SemanticAbort();
+    }
+
+    void check_io_item_not_named_constant(ASR::expr_t *expr, bool is_input) {
+        if (!ASR::is_a<ASR::ImpliedDoLoop_t>(*expr)) {
+            if (is_input) {
+                check_io_variable_not_named_constant(expr,
+                    "input item must be a variable, not a named constant");
+            }
+            return;
+        }
+        ASR::ImpliedDoLoop_t *idl = ASR::down_cast<ASR::ImpliedDoLoop_t>(expr);
+        check_io_variable_not_named_constant(idl->m_var,
+            "implied-do variable cannot be a named constant");
+        for (size_t i = 0; i < idl->n_values; i++) {
+            check_io_item_not_named_constant(idl->m_values[i], is_input);
+        }
     }
 
     // Inside a `rank (n)` block of `select rank`, an assumed-rank input or
@@ -11064,7 +11196,7 @@ public:
                 if (sym && ASR::is_a<ASR::Namelist_t>(*ASRUtils::symbol_get_past_external(sym))) {
                     tmp = ASR::make_FileWrite_t(al, x.base.base.loc, x.m_label,
                         nullptr, nullptr, nullptr, nullptr, nullptr, 0,
-                        nullptr, nullptr, nullptr, false, sym, nullptr, nullptr, nullptr, nullptr);
+                        nullptr, nullptr, nullptr, false, sym, nullptr, nullptr, nullptr, nullptr, nullptr);
                     return;
                 }
             }
@@ -11106,6 +11238,7 @@ public:
             this->visit_expr(*x.m_values[i]);
             ASR::expr_t *expr = ASRUtils::EXPR(tmp);
             check_io_item_not_function(expr);
+            check_io_item_not_named_constant(expr, false);
             expr = cast_assumed_rank_io_item(expr, x.base.base.loc, "print");
             check_mixed_derived_type_output_implied_do(expr, false);
             body.push_back(al, expr);

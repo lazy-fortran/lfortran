@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -17,8 +20,41 @@
 
 #include <bin/lfortran_command_line_parser.h>
 
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace LCompilers::CommandLineInterface {
     namespace lc = LCompilers;
+
+    static bool is_terminal(FILE *stream) {
+#ifdef _WIN32
+        return _isatty(_fileno(stream)) != 0;
+#else
+        return isatty(fileno(stream)) != 0;
+#endif
+    }
+
+    // Any non-empty NO_COLOR turns off colors by default
+    // (https://no-color.org).
+    static bool no_color_env() {
+        const char *no_color = std::getenv("NO_COLOR");
+        return no_color != nullptr && no_color[0] != '\0';
+    }
+
+    // Whether output to `streams` is colored for `--color=<mode>`: `auto`
+    // colors only when every stream is a terminal and NO_COLOR is not set.
+    static bool resolve_colors(const std::string &mode,
+                               std::initializer_list<FILE *> streams) {
+        if (mode == "always") return true;
+        if (mode == "never" || no_color_env()) return false;
+        for (FILE *stream : streams) {
+            if (!is_terminal(stream)) return false;
+        }
+        return true;
+    }
 
     LFortranCommandLineParser::LFortranCommandLineParser(std::vector<std::string> &args)
         : args(args)
@@ -208,7 +244,7 @@ namespace LCompilers::CommandLineInterface {
 
         fast_opts.arg_file = fast_opts.arg_files[0];
         fast_opts.from_asr = endswith(fast_opts.arg_file, ".asr");
-        compiler_options.use_colors = true;
+        compiler_options.use_colors = resolve_colors(fast_opts.arg_color, {stderr});
         compiler_options.use_runtime_colors = false;
         compiler_options.indent = true;
         compiler_options.prescan = true;
@@ -311,7 +347,13 @@ namespace LCompilers::CommandLineInterface {
             "Parse and verify standalone ASR text without running passes")->group(group_output_debugging_options);
         app.add_flag("--with-intrinsic-mods", compiler_options.po.with_intrinsic_mods, "Show intrinsic modules in ASR")->group(group_output_debugging_options);
         app.add_flag("--show-ast-f90", opts.show_ast_f90, "Show Fortran from AST for the given file and exit")->group(group_output_debugging_options);
-        app.add_flag("--no-color", opts.arg_no_color, "Turn off colored AST/ASR")->group(group_output_debugging_options);
+        app.add_flag("--no-color", opts.arg_no_color,
+            "Turn off colored diagnostics and AST/ASR (same as --color=never)")->group(group_output_debugging_options);
+        app.add_option("--color", opts.arg_color,
+            "Color diagnostics and AST/ASR: auto (on a terminal, unless NO_COLOR is set), always or never")
+            ->check(CLI::IsMember({"auto", "always", "never"}))
+            ->multi_option_policy(CLI::MultiOptionPolicy::TakeLast)
+            ->capture_default_str()->group(group_output_debugging_options);
         app.add_flag("--runtime-color", opts.arg_runtime_color, "Enable colored runtime errors")->group(group_output_debugging_options);
         app.add_flag("--no-indent", opts.arg_no_indent, "Turn off Indented print ASR/AST")->group(group_output_debugging_options);
         app.add_flag("--tree", compiler_options.po.tree, "Tree structure print ASR/AST")->group(group_output_debugging_options);
@@ -334,6 +376,7 @@ namespace LCompilers::CommandLineInterface {
         app.add_flag("--show-fortran", opts.show_fortran, "Show Fortran translation source for the given file and exit")->group(group_output_debugging_options);
         app.add_flag("--show-stacktrace", compiler_options.show_stacktrace, "Show internal stacktrace on compiler errors")->group(group_output_debugging_options);
         app.add_flag("--time-report", compiler_options.time_report, "Show compilation time report")->group(group_output_debugging_options);
+        app.add_flag("--save-temps", opts.save_temps, "Keep the temporary directory of the intermediate files and print its path")->group(group_output_debugging_options);
 
 
         // Pass and transformation-related flags
@@ -402,6 +445,7 @@ namespace LCompilers::CommandLineInterface {
         app.add_flag("--mangle-underscore-external", compiler_options.po.mangle_underscore_external, "Mangles external symbols with underscore")->group(group_mangling_options);
 
         // Miscellaneous flags
+        app.add_flag("--clean-temp", opts.clean_temp, "Remove the temporary directories of killed compiler runs and exit")->group(group_miscellaneous_options);
         app.add_flag("--continue-compilation", compiler_options.continue_compilation, "collect error message and continue compilation")->group(group_miscellaneous_options);
         app.add_flag("--semantics-only", compiler_options.semantics_only, "do parsing and semantics, and report all the errors")->group(group_miscellaneous_options);
         app.add_flag("--print-leading-space", compiler_options.print_leading_space, "Print leading white space if format is unspecified")->group(group_miscellaneous_options);
@@ -536,7 +580,32 @@ namespace LCompilers::CommandLineInterface {
             compiler_options.po.realloc_lhs_arrays = false;
         }
 
-        compiler_options.use_colors = !opts.arg_no_color;
+        if (opts.arg_no_color) {
+            opts.arg_color = "never";
+        }
+        // Decided when the program runs, so that the object code does not
+        // depend on where the compiler's output goes.
+        compiler_options.use_stacktrace_colors = opts.arg_color != "never";
+        if (kernel->parsed()) {
+            // The kernel's client renders the colors: Jupyter, or the
+            // prompt, which passes the `--color` it resolved.
+            compiler_options.use_colors = resolve_colors(opts.arg_color, {});
+        } else if (opts.show_prescan || opts.show_tokens || opts.show_ast
+                || opts.show_asr || opts.show_ast_f90) {
+            // Diagnostics go to stderr, the AST/ASR to stdout.
+            compiler_options.use_colors = resolve_colors(opts.arg_color,
+                {stderr, stdout});
+        } else {
+            compiler_options.use_colors = resolve_colors(opts.arg_color,
+                {stderr});
+        }
+        // `fmt` and `mod --show-asr` color only what they write to stdout.
+        if (!opts.arg_fmt_no_color) {
+            opts.arg_fmt_no_color = !resolve_colors(opts.arg_color, {stdout});
+        }
+        if (!opts.arg_mod_no_color) {
+            opts.arg_mod_no_color = !resolve_colors(opts.arg_color, {stdout});
+        }
         compiler_options.use_runtime_colors = opts.arg_runtime_color;
         compiler_options.indent = !opts.arg_no_indent;
         compiler_options.prescan = !opts.arg_no_prescan;

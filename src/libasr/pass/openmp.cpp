@@ -618,15 +618,27 @@ class DoConcurrentStatementVisitor : public ASR::CallReplacerOnExpressionsVisito
             // A procedure of the translation unit is visible everywhere.
             return;
         }
-        ASR::symbol_t* func_sym = nullptr;
-        if (ASR::is_a<ASR::Program_t>(*ASR::down_cast<ASR::symbol_t>(asr_owner))) {
-            func_sym = import_procedure_implementation(al, copies, current_scope, x.m_name);
-        } else {
-            func_sym = resolve_symbol_within(current_scope, outermost_scope,
-                ASRUtils::symbol_name(x.m_name));
-            if (func_sym == nullptr &&
-                    ASR::is_a<ASR::Module_t>(*ASR::down_cast<ASR::symbol_t>(asr_owner))) {
-                func_sym = current_scope->resolve_symbol(fn->m_name);
+        // The outline is parented at the translation unit, so it does not
+        // contain a callee declared in the caller. Import one that is not
+        // already there. A local interface has no body to import; duplicate
+        // the declaration. Any other procedure is imported from its module,
+        // or copied into one when a program or procedure contains it. Do not
+        // resolve the name outside the outline: a module sibling is not in
+        // that parent chain.
+        ASR::symbol_t* func_sym = resolve_symbol_within(current_scope, outermost_scope,
+            ASRUtils::symbol_name(x.m_name));
+        if (func_sym == nullptr) {
+            ASR::deftypeType deftype = ASRUtils::get_FunctionType(fn)->m_deftype;
+            ASR::symbol_t* proc_owner = ASRUtils::get_asr_owner(&fn->base);
+            bool in_module = proc_owner != nullptr
+                && ASR::is_a<ASR::Module_t>(*proc_owner);
+            if (!in_module && (deftype == ASR::deftypeType::Interface
+                    || deftype == ASR::deftypeType::ImplicitInterface)) {
+                func_sym = import_procedure_declaration(al, copies, current_scope,
+                    &fn->base);
+            } else {
+                func_sym = import_procedure_implementation(al, copies,
+                    current_scope, x.m_name);
             }
         }
         if (copies.failed) return;
@@ -661,11 +673,11 @@ class DoConcurrentStatementVisitor : public ASR::CallReplacerOnExpressionsVisito
 
 // The symbol in `scope` for `proc`, a procedure with a body used by code moved
 // into `scope`. A module procedure is imported from its module. A procedure
-// contained in a program cannot be imported from the program, so it is copied,
-// once, into a module of its own, and the procedures, interfaces and
-// declarations the copy refers to are imported into it the same way. The
-// copy is recorded in `copies`. The program keeps its own procedure, which
-// the rest of the program refers to.
+// contained in a program or in another procedure cannot be imported from
+// there, so it is copied, once, into a module of its own, and the procedures,
+// interfaces and declarations the copy refers to are imported into it the
+// same way. The copy is recorded in `copies`. The original procedure stays
+// where it is; the rest of the program refers to it.
 static ASR::symbol_t* import_procedure_implementation(Allocator &al,
         OpenMPOutlineState &copies, SymbolTable* scope, ASR::symbol_t* proc) {
     if (copies.failed) return nullptr;
@@ -679,10 +691,15 @@ static ASR::symbol_t* import_procedure_implementation(Allocator &al,
     }
     ASR::Function_t* fn = ASR::down_cast<ASR::Function_t>(target);
     ASR::symbol_t* owner = ASRUtils::get_asr_owner(target);
-    if (owner != nullptr && ASR::is_a<ASR::Program_t>(*owner)) {
+    if (owner != nullptr && (ASR::is_a<ASR::Program_t>(*owner)
+            || ASR::is_a<ASR::Function_t>(*owner))) {
         ASR::symbol_t*& copy = copies.procedure_copies[fn];
         if (copy == nullptr) {
-            SymbolTable* tu_scope = ASRUtils::symbol_parent_symtab(target)->parent;
+            // A procedure contained in a module procedure is not a direct
+            // child of the translation unit. A program procedure is.
+            SymbolTable* owner_scope = ASRUtils::symbol_parent_symtab(target);
+            SymbolTable* tu_scope = ASR::is_a<ASR::Function_t>(*owner)
+                ? owner_scope->get_tu_scope() : owner_scope->parent;
             SymbolTable* module_scope = al.make_new<SymbolTable>(tu_scope);
             ASRUtils::SymbolDuplicator duplicator(al);
             ASR::symbol_t* moved = duplicator.duplicate_Function(fn, module_scope);
@@ -770,6 +787,9 @@ class InvolvedSymbolsCollector:
     private:
         Allocator &al;
         std::set<SymbolTable*> block_scopes;
+        // Set while walking a do-loop bound. A variable used there is private,
+        // as a bare bound is. visit_Var would mark an ordinary variable shared.
+        bool in_loop_bound = false;
 
         bool is_block_local(ASR::symbol_t* sym) {
             return block_scopes.count(ASRUtils::symbol_parent_symtab(sym)) != 0;
@@ -812,8 +832,34 @@ class InvolvedSymbolsCollector:
             return true;
         }
 
+        // Record one variable of a loop bound. Parameters are named constants.
+        // Anything else is private, including when the body already recorded it
+        // as shared: a shared scalar is outlined as a pointer and is not lowered.
+        void record_loop_bound_var(const ASR::Var_t &x) {
+            if (!ASR::is_a<ASR::Variable_t>(*ASRUtils::symbol_get_past_external(x.m_v))) {
+                return;
+            }
+            if (add_named_constant(x.m_v)) {
+                return;
+            }
+            std::string key = to_lower(ASRUtils::symbol_name(x.m_v));
+            if (symbols.find(key) == symbols.end()) {
+                ASR::ttype_t* type = ASRUtils::symbol_type(x.m_v);
+                if (ASR::is_a<ASR::FunctionType_t>(*type)) {
+                    type = ASRUtils::TYPE(ASR::make_Pointer_t(al, x.base.base.loc, type));
+                }
+                symbols[key].first = type;
+                symbols[key].second = ASRUtils::EXPR(ASR::make_Var_t(al, x.base.base.loc, x.m_v));
+            }
+            variable_accessibility[ASRUtils::symbol_name(x.m_v)] = ASR::omp_clauseType::OMPPrivate;
+        }
+
         void visit_Var(const ASR::Var_t &x) {
             if (is_block_local(x.m_v)) {
+                return;
+            }
+            if (in_loop_bound) {
+                record_loop_bound_var(x);
                 return;
             }
             if(symbols.find(to_lower(ASRUtils::symbol_name(x.m_v))) != symbols.end()) {
@@ -882,44 +928,20 @@ class InvolvedSymbolsCollector:
                 symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = ASRUtils::symbol_type(var->m_v);
                 symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = &var->base;
             }
-            if (ASR::is_a<ASR::Var_t>(*x.m_end)
-                    && !is_block_local(ASR::down_cast<ASR::Var_t>(x.m_end)->m_v)
-                    && !add_named_constant(ASR::down_cast<ASR::Var_t>(x.m_end)->m_v)) {
-                var = ASR::down_cast<ASR::Var_t>(x.m_end);
-                if(symbols.find((to_lower(ASRUtils::symbol_name(var->m_v)))) != symbols.end()) {
-                    // Make the bool false in that pair
-                    auto it = symbols.find((to_lower(ASRUtils::symbol_name(var->m_v))));
-                    if (it != symbols.end()) {
-                        ASR::ttype_t* type_val = it->second.first;
-                        symbols.erase(it);
-                        symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = type_val;
-                        symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = it->second.second;
-                    }
-                }
-                variable_accessibility[ASRUtils::symbol_name(var->m_v)] = ASR::omp_clauseType::OMPPrivate;
-                symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = ASRUtils::symbol_type(var->m_v);
-                symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = &var->base;
+            // Walk start, end, and step even when they are not Vars (`n-1`,
+            // `2*n`). A bare bound is handled by the same recording.
+            bool saved_in_loop_bound = in_loop_bound;
+            in_loop_bound = true;
+            if (x.m_start) {
+                visit_expr(*x.m_start);
             }
-            if (ASR::is_a<ASR::Var_t>(*x.m_start)
-                    && !is_block_local(ASR::down_cast<ASR::Var_t>(x.m_start)->m_v)
-                    && !add_named_constant(ASR::down_cast<ASR::Var_t>(x.m_start)->m_v)) {
-                var = ASR::down_cast<ASR::Var_t>(x.m_start);
-                if(symbols.find((to_lower(ASRUtils::symbol_name(var->m_v)))) != symbols.end()) {
-                    // Make the bool false in that pair
-                    auto it = symbols.find((to_lower(ASRUtils::symbol_name(var->m_v))));
-                    if (it != symbols.end()) {
-                        ASR::ttype_t* type_val = it->second.first;
-                        symbols.erase(it);
-                        symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = type_val;
-                        symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = it->second.second;
-
-                    }
-                }
-                variable_accessibility[ASRUtils::symbol_name(var->m_v)] = ASR::omp_clauseType::OMPPrivate;
-                symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].first = ASRUtils::symbol_type(var->m_v);
-                symbols[(to_lower(ASRUtils::symbol_name(var->m_v)))].second = &var->base;
+            if (x.m_end) {
+                visit_expr(*x.m_end);
             }
-            
+            if (x.m_increment) {
+                visit_expr(*x.m_increment);
+            }
+            in_loop_bound = saved_in_loop_bound;
             return;
         }
 };
@@ -2351,17 +2373,21 @@ class ParallelRegionVisitor :
                     bool is_allocatable = ASR::is_a<ASR::Allocatable_t>(*sym_type);
                     ASR::Array_t* array_type = ASR::down_cast<ASR::Array_t>(ASRUtils::type_get_past_allocatable(sym_type));
                     ASR::ttype_t* array_pointer_type = descriptor_pointer_type(sym_type);
-                    bool is_host_associated = current_scope->get_symbol(it.first) == nullptr;
+                    // A use-associated name is an ExternalSymbol in this scope, not a
+                    // local array. Keep it, as an array of an enclosing scope is kept.
+                    ASR::symbol_t* declared_here = current_scope->get_symbol(it.first);
+                    bool is_host_associated = declared_here == nullptr
+                            || ASR::is_a<ASR::ExternalSymbol_t>(*declared_here);
                     if ((is_argument && array_type->m_physical_type == ASR::array_physical_typeType::PointerArray)
                             || is_host_associated) {
                         /*
                             Changing the type of an explicit-shape dummy argument would
                             change the interface of the procedure, which callers compiled
-                            separately rely on. An array declared in an enclosing scope
-                            must not be replaced by a new local array either. Keep the
-                            array as it is; its storage is contiguous, so the outlined
-                            region receives its data address and bounds and associates
-                            its own pointer with them.
+                            separately rely on. An array declared in an enclosing scope,
+                            or use-associated from a module, must not be replaced by a
+                            new local array either. Keep the array as it is; its storage
+                            is contiguous, so the outlined region receives its data
+                            address and bounds and associates its own pointer with them.
                             The region's statements move to the outlined function, which
                             replaces their variables in place, also in the dimensions of
                             expression types that share the array's declared type. Give
@@ -2422,7 +2448,8 @@ class ParallelRegionVisitor :
 
                 ASR::ttype_t* sym_type = it.second.first;
                 bool is_array = ASRUtils::is_array(sym_type);
-                ASR::Variable_t* var_sym = ASR::down_cast<ASR::Variable_t>(current_scope->resolve_symbol(it.first));
+                ASR::Variable_t* var_sym = ASR::down_cast<ASR::Variable_t>(
+                    ASRUtils::symbol_get_past_external(current_scope->resolve_symbol(it.first)));
                 bool is_shared = c->variable_accessibility[it.first] == ASR::omp_clauseType::OMPShared && !(var_sym->m_storage == ASR::storage_typeType::Parameter);
 
                 if (is_array) {
@@ -2856,7 +2883,8 @@ class ParallelRegionVisitor :
                     ASR::omp_clauseType::OMPShared :
                     ASR::omp_clauseType::OMPPrivate;
                 ASR::symbol_t* actual_sym = current_scope->resolve_symbol(it.first);
-                ASR::Variable_t* local_var = ASR::down_cast<ASR::Variable_t>(actual_sym);
+                ASR::Variable_t* local_var = ASR::down_cast<ASR::Variable_t>(
+                    ASRUtils::symbol_get_past_external(actual_sym));
                 if(local_var->m_intent == ASR::intentType::In || local_var->m_storage == ASR::storage_typeType::Parameter) {
                     c.variable_accessibility[it.first] = ASR::omp_clauseType::OMPPrivate;
                 }
@@ -2955,45 +2983,11 @@ class ParallelRegionVisitor :
             }
             reduction_variables.clear();
 
-            for(auto it:involved_symbols) {
-                ASR::symbol_t* actual_sym = current_scope->resolve_symbol(it.first);
-                ASR::symbol_t* sym = current_scope->get_symbol(std::string(ASRUtils::symbol_name(thread_data_sym)) + "_" + it.first);
-                LCOMPILERS_ASSERT(sym != nullptr);
-                if(c.variable_accessibility[it.first] == ASR::omp_clauseType::OMPPrivate || ASRUtils::is_array(ASRUtils::type_get_past_pointer(ASRUtils::symbol_type(actual_sym)))) {
-                    continue;
-                }
-                ASR::ttype_t* ptr_type = ASRUtils::TYPE(ASR::make_Pointer_t(al, x.base.base.loc, ASRUtils::symbol_type(actual_sym)));
-                ASR::Variable_t* local_var = ASR::down_cast<ASR::Variable_t>(actual_sym);
-                if(local_var->m_intent == ASR::intentType::In || local_var->m_storage == ASR::storage_typeType::Parameter) {
-                    continue;
-                }
-                ASR::symbol_t* tmp_sym = ASR::down_cast<ASR::symbol_t>(
-                                        ASR::make_Variable_t(al, local_var->base.base.loc, local_var->m_parent_symtab,
-                                        s2c(al, local_var->m_parent_symtab->get_unique_name("ptr_" + it.first)), local_var->m_dependencies, local_var->n_dependencies,
-                                        local_var->m_intent, nullptr, nullptr,
-                                        ASR::storage_typeType::Default, ptr_type, local_var->m_type_declaration,
-                                        local_var->m_abi, local_var->m_access, local_var->m_presence,
-                                        local_var->m_value_attr, local_var->m_target_attr, local_var->m_contiguous_attr, 
-                                        local_var->m_bindc_name, local_var->m_is_volatile, local_var->m_is_asynchronous, local_var->m_is_protected,
-                                        ASR::pass_attrType::NotMethod, nullptr,
-                                        local_var->m_codims, local_var->n_codims)
-                                        );
-                ASR::Variable_t* tmp_var = ASR::down_cast<ASR::Variable_t>(tmp_sym);
-                current_scope->add_symbol(tmp_var->m_name, tmp_sym);
-                // call c_f_pointer(tdata%<sym>, <sym>, [ubound-lbound+1])
-                nested_lowered_body.push_back(b.CPtrToPointer(
-                    ASRUtils::EXPR(ASR::make_StructInstanceMember_t(al, x.base.base.loc, data_expr,
-                    sym, ASRUtils::symbol_type(sym), nullptr)),
-                    b.Var(current_scope->get_symbol(tmp_var->m_name)),
-                    nullptr
-                ));
-
-                nested_lowered_body.push_back(b.Assignment(
-                    b.Var(actual_sym),
-                    b.Var(current_scope->get_symbol(tmp_var->m_name))
-                ));
-            }
-
+            // A shared scalar is the address stored in the thread data. The
+            // outlined procedure associates its own pointer with that address
+            // and reads and writes the original through it, so there is
+            // nothing to copy back. A pointer temporary cloned from a dummy
+            // keeps that dummy's intent, which LLVM does not allocate.
 
             remove_original_statement = true;
         }
@@ -4137,7 +4131,8 @@ class ParallelRegionVisitor :
                     ASR::omp_clauseType::OMPShared : ASR::omp_clauseType::OMPPrivate;
                 
                 ASR::symbol_t* actual_sym = current_scope->resolve_symbol(it.first);
-                ASR::Variable_t* local_var = ASR::down_cast<ASR::Variable_t>(actual_sym);
+                ASR::Variable_t* local_var = ASR::down_cast<ASR::Variable_t>(
+                    ASRUtils::symbol_get_past_external(actual_sym));
                 if(local_var->m_intent == ASR::intentType::In || 
                 local_var->m_storage == ASR::storage_typeType::Parameter) {
                     c.variable_accessibility[it.first] = ASR::omp_clauseType::OMPPrivate;
@@ -4245,52 +4240,10 @@ class ParallelRegionVisitor :
                 ));
             }
             reduction_variables.clear();
-            
-            // Handle shared variables (similar to parallel)
-            for(auto it:involved_symbols) {
-                ASR::symbol_t* actual_sym = current_scope->resolve_symbol(it.first);
-                ASR::symbol_t* sym = current_scope->get_symbol(
-                    std::string(ASRUtils::symbol_name(thread_data_sym)) + "_" + it.first);
-                LCOMPILERS_ASSERT(sym != nullptr);
-                if(c.variable_accessibility[it.first] == ASR::omp_clauseType::OMPPrivate || 
-                ASRUtils::is_array(ASRUtils::type_get_past_pointer(ASRUtils::symbol_type(actual_sym)))) {
-                    continue;
-                }
-                ASR::ttype_t* ptr_type = ASRUtils::TYPE(ASR::make_Pointer_t(al, x.base.base.loc, 
-                    ASRUtils::symbol_type(actual_sym)));
-                ASR::Variable_t* local_var = ASR::down_cast<ASR::Variable_t>(actual_sym);
-                if(local_var->m_intent == ASR::intentType::In || 
-                local_var->m_storage == ASR::storage_typeType::Parameter) {
-                    continue;
-                }
-                ASR::symbol_t* tmp_sym = ASR::down_cast<ASR::symbol_t>(
-                    ASR::make_Variable_t(al, local_var->base.base.loc, local_var->m_parent_symtab,
-                    s2c(al, local_var->m_parent_symtab->get_unique_name("ptr_" + it.first)), 
-                    local_var->m_dependencies, local_var->n_dependencies,
-                    local_var->m_intent, nullptr, nullptr,
-                    ASR::storage_typeType::Default, ptr_type, local_var->m_type_declaration,
-                    local_var->m_abi, local_var->m_access, local_var->m_presence,
-                    local_var->m_value_attr, local_var->m_target_attr, local_var->m_contiguous_attr, 
-                    local_var->m_bindc_name, local_var->m_is_volatile, local_var->m_is_asynchronous, local_var->m_is_protected,
-                    ASR::pass_attrType::NotMethod, nullptr,
-                    local_var->m_codims, local_var->n_codims)
-                );
-                ASR::Variable_t* tmp_var = ASR::down_cast<ASR::Variable_t>(tmp_sym);
-                current_scope->add_symbol(tmp_var->m_name, tmp_sym);
-                
-                nested_lowered_body.push_back(b.CPtrToPointer(
-                    ASRUtils::EXPR(ASR::make_StructInstanceMember_t(al, x.base.base.loc, data_expr,
-                    sym, ASRUtils::symbol_type(sym), nullptr)),
-                    b.Var(current_scope->get_symbol(tmp_var->m_name)),
-                    nullptr
-                ));
-                
-                nested_lowered_body.push_back(b.Assignment(
-                    b.Var(actual_sym),
-                    b.Var(current_scope->get_symbol(tmp_var->m_name))
-                ));
-            }
-            
+
+            // Same as visit_OMPParallel: the outlined procedure already uses
+            // the shared scalar through the address in the thread data.
+
             remove_original_statement = true;
         }
 

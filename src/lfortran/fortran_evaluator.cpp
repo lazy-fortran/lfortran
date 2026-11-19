@@ -529,6 +529,10 @@ Result<FortranEvaluator::EvalResult> FortranEvaluator::evaluate(
 {
 #ifdef HAVE_LFORTRAN_LLVM
     EvalResult result;
+#ifndef __EMSCRIPTEN__
+    // The scope of the session before this cell.
+    SymbolTable *cell_parent = symbol_table;
+#endif
 
     if (compiler_options.interactive) {
         // A cell reports what it declared, read and wrote. Cleared up front so
@@ -630,6 +634,49 @@ Result<FortranEvaluator::EvalResult> FortranEvaluator::evaluate(
     if (compiler_options.interactive) {
         drop_redefinitions(*m);
     }
+
+#ifndef __EMSCRIPTEN__
+    // A procedure that is defined nowhere, neither by a cell nor by the
+    // runtime, is an error in the user's code, like an undefined reference at
+    // link time. A cell that only defines procedures may refer to one that a
+    // later cell defines, so it is only an error once code that needs it is
+    // to run. The cell is then not added to the JIT, so it leaves no trace,
+    // as with a semantic error, and the user can define what is missing and
+    // enter the cell again.
+    if (has_setup || has_program || return_type != "none") {
+        std::vector<std::string> undefined
+            = get_llvm_evaluator().undefined_symbols(*m);
+        if (!undefined.empty()) {
+            if (compiler_options.interactive) {
+                // The passes of this cell have rewritten the earlier cells'
+                // symbols in place (see snapshot_cell_scope), so the session
+                // goes back to the copy of them taken before the passes ran.
+                SymbolTable *restored = symbol_table->parent;
+                auto previous = cell_implicit_types.find(cell_parent);
+                std::map<std::string, ASR::ttype_t*> implicit_types;
+                if (previous != cell_implicit_types.end()) {
+                    implicit_types = std::move(previous->second);
+                    cell_implicit_types.erase(previous);
+                }
+                cell_implicit_types.erase(symbol_table);
+                cell_implicit_types[restored] = std::move(implicit_types);
+                symbol_table = restored;
+                // What drop_redefinitions() kept is not in the JIT either.
+                for (llvm::Function &fn : *m->m_m) {
+                    if (!fn.isDeclaration() && !fn.hasLocalLinkage()) {
+                        defined_symbols.erase(fn.getName().str());
+                    }
+                }
+            }
+            for (const std::string &name : undefined) {
+                diagnostics.add(diag::Diagnostic(
+                    "undefined reference to '" + name + "'",
+                    diag::Level::Error, diag::Stage::CodeGen));
+            }
+            return Error();
+        }
+    }
+#endif
 
     // LLVM -> Machine code -> Execution
 #ifdef __EMSCRIPTEN__
@@ -1285,11 +1332,44 @@ public:
     }
 };
 
+// An enumerator is imported into the scope holding its enumeration, and into
+// any scope that uses the module holding it, as an ExternalSymbol naming the
+// enumeration rather than a module. Finds the copy of the enumerator the
+// same way: the enumeration of the same name in the copied module, or in the
+// scopes visible from `scope` if no module holds it. Returns nullptr if
+// `target` is not an enumerator or its copy cannot be found.
+static ASR::symbol_t* copied_enumerator(SymbolTable *scope, SymbolTable *tu,
+    ASR::symbol_t *target, const char *name)
+{
+    ASR::symbol_t *enum_sym = ASRUtils::get_asr_owner(target);
+    if (enum_sym == nullptr || !ASR::is_a<ASR::Enum_t>(*enum_sym)) {
+        return nullptr;
+    }
+    ASR::symbol_t *holder = ASRUtils::get_asr_owner(enum_sym);
+    ASR::symbol_t *copy = nullptr;
+    if (holder != nullptr && ASR::is_a<ASR::Module_t>(*holder)) {
+        ASR::symbol_t *mod = tu->resolve_symbol(ASRUtils::symbol_name(holder));
+        if (mod != nullptr && ASR::is_a<ASR::Module_t>(*mod)) {
+            copy = ASR::down_cast<ASR::Module_t>(mod)->m_symtab->get_symbol(
+                ASRUtils::symbol_name(enum_sym));
+        }
+    } else {
+        copy = scope->resolve_symbol(ASRUtils::symbol_name(enum_sym));
+    }
+    if (copy == nullptr || !ASR::is_a<ASR::Enum_t>(*copy)) return nullptr;
+    ASR::symbol_t *member = ASR::down_cast<ASR::Enum_t>(copy)->m_symtab
+        ->get_symbol(name);
+    if (member == nullptr || !ASR::is_a<ASR::Variable_t>(*member)) {
+        return nullptr;
+    }
+    return member;
+}
+
 // The duplicated symbols still point into the scopes they were copied from: an
-// ExternalSymbol at the module it names, a generic procedure at the specific
-// procedures it resolves to. A later cell resolves a name and finds the copy,
-// so anything still pointing at an original does not match it. Point them at
-// the copies.
+// ExternalSymbol at the module or enumeration it names, a generic procedure at
+// the specific procedures it resolves to. A later cell resolves a name and
+// finds the copy, so anything still pointing at an original does not match it.
+// Point them at the copies.
 static void relink_copied_symbols(Allocator &al, SymbolTable *scope,
     SymbolTable *tu)
 {
@@ -1297,6 +1377,12 @@ static void relink_copied_symbols(Allocator &al, SymbolTable *scope,
         ASR::symbol_t *s = item.second;
         if (ASR::is_a<ASR::ExternalSymbol_t>(*s)) {
             ASR::ExternalSymbol_t *es = ASR::down_cast<ASR::ExternalSymbol_t>(s);
+            ASR::symbol_t *enumerator = copied_enumerator(scope, tu,
+                es->m_external, es->m_original_name);
+            if (enumerator != nullptr) {
+                es->m_external = enumerator;
+                continue;
+            }
             ASR::symbol_t *mod = tu->resolve_symbol(es->m_module_name);
             if (mod == nullptr || !ASR::is_a<ASR::Module_t>(*mod)) continue;
             ASR::Module_t *m = ASR::down_cast<ASR::Module_t>(mod);
@@ -1382,6 +1468,41 @@ static void relink_copied_symbols(Allocator &al, SymbolTable *scope,
     }
 }
 
+// A copied procedure keeps the expressions of its types, and those can call
+// a procedure of the cell scope that declares it: the getter through which
+// an array bound reads a use-associated variable, for instance. Left
+// pointing at the original, a later cell copies the call into the type of
+// its own reference to the procedure and names a symbol of a scope that is
+// not in its chain. Point every call of a procedure of a copied cell scope
+// at the copy of that procedure.
+class RelinkCellScopeReferences
+    : public ASR::BaseWalkVisitor<RelinkCellScopeReferences>
+{
+    // Each copied cell scope, by the scope it was copied from.
+    const std::map<SymbolTable*, SymbolTable*> &copies;
+
+    void relink(ASR::symbol_t *&sym) {
+        if (sym == nullptr) return;
+        auto copy = copies.find(ASRUtils::symbol_parent_symtab(sym));
+        if (copy == copies.end()) return;
+        ASR::symbol_t *s = copy->second->get_symbol(ASRUtils::symbol_name(sym));
+        if (s != nullptr) sym = s;
+    }
+
+public:
+    RelinkCellScopeReferences(const std::map<SymbolTable*, SymbolTable*> &copies)
+        : copies(copies) {
+        visit_compile_time_value = true;
+    }
+
+    void visit_FunctionCall(const ASR::FunctionCall_t &x) {
+        ASR::FunctionCall_t &c = const_cast<ASR::FunctionCall_t&>(x);
+        relink(c.m_name);
+        relink(c.m_original_name);
+        ASR::BaseWalkVisitor<RelinkCellScopeReferences>::visit_FunctionCall(x);
+    }
+};
+
 } // namespace
 
 SymbolTable* FortranEvaluator::snapshot_cell_scope(ASR::TranslationUnit_t &asr)
@@ -1464,6 +1585,17 @@ SymbolTable* FortranEvaluator::copy_cell_scope(SymbolTable *scope,
         duplicator.duplicate_symbol(item.second, copy);
     }
     relink_copied_symbols(al, copy, copy);
+    // The earlier cell scopes are copied already, oldest first, at the same
+    // depth as the scopes they were copied from.
+    std::map<SymbolTable*, SymbolTable*> copies;
+    for (SymbolTable *s = scope, *c = copy; s != nullptr && c != nullptr;
+            s = s->parent, c = c->parent) {
+        copies[s] = c;
+    }
+    RelinkCellScopeReferences relink(copies);
+    for (auto &item : copy->get_scope()) {
+        relink.visit_symbol(*item.second);
+    }
     return copy;
 }
 

@@ -278,6 +278,8 @@ static int input_scan(FILE *file, const char *format, ...)
 /* ---- real(16) / binary128 support ---- */
 #include "lfortran_float128_quadmath.h"
 #include "lfortran_float128.c"
+#include "lfortran_trig.h"
+#include "lfortran_complex128.h"
 /* ----------------------------------------------------- */
 /* --- Memory debug implementation (Compiler's side) --- */
 /* ----------------------------------------------------- */
@@ -3856,6 +3858,7 @@ void handle_hexadecimal(const char* format, Primitive_Types type,
 
     int byte_count = 0;
     uint64_t raw = 0;
+    char *hex_full = NULL;
     switch (type) {
         case INTEGER_8_TYPE:
             byte_count = 1;
@@ -3904,45 +3907,17 @@ void handle_hexadecimal(const char* format, Primitive_Types type,
             break;
         }
         case FLOAT_128_TYPE: {
-            /* fp128 hex: handle separately .
-             * Build the full 32-hex-digit string directly from the 16 raw bytes. */
+            /* fp128 does not fit in raw: build the digits from its 16 bytes,
+             * most significant byte first */
             byte_count = 16;
             unsigned char fp128_bytes[16];
             memcpy(fp128_bytes, arg_ptr, 16);
-            int total_hex = 32;
-            char *hex_full = (char*)internal_malloc((total_hex + 1) * sizeof(char));
-            for (int _b = 15; _b >= 0; _b--) {
-                snprintf(hex_full + (15 - _b) * 2, 3, "%02X", fp128_bytes[_b]);
+            hex_full = (char*)internal_malloc((2 * byte_count + 1) * sizeof(char));
+            for (int i = 0; i < byte_count; i++) {
+                snprintf(hex_full + 2 * i, 3, "%02X",
+                    fp128_bytes[byte_count - 1 - i]);
             }
-            hex_full[total_hex] = '\0';
-            /* strip leading zeros, respect min_digits and width */
-            int _s = 0;
-            while (_s < total_hex - 1 && hex_full[_s] == '0') _s++;
-            int _dlen = total_hex - _s;
-            if (_dlen < 1) _dlen = 1;
-            if (min_digits < 1) min_digits = 1;
-            int _olen = _dlen > min_digits ? _dlen : min_digits;
-            char *_out = (char*)internal_malloc((_olen + (width > 0 ? width : 0) + 2) * sizeof(char));
-            int _lz = _olen - _dlen;
-            for (int _i = 0; _i < _lz; _i++) _out[_i] = '0';
-            memcpy(_out + _lz, hex_full + _s, _dlen);
-            _out[_olen] = '\0';
-            internal_free(hex_full);
-            if (width > 0 && _olen > width) {
-                char *stars = (char*)internal_malloc((width + 1) * sizeof(char));
-                memset(stars, '*', width);
-                stars[width] = '\0';
-                *result = stars;
-            } else if (width > _olen) {
-                char *padded = (char*)internal_malloc((width + 1) * sizeof(char));
-                memset(padded, ' ', width - _olen);
-                memcpy(padded + (width - _olen), _out, _olen + 1);
-                internal_free(_out);
-                *result = padded;
-            } else {
-                *result = _out;
-            }
-            return; /* early return: skip the generic uint64 path below */
+            break;
         }
         default:
             fprintf(stderr, "Unsupported type for Z edit descriptor\n");
@@ -3954,9 +3929,11 @@ void handle_hexadecimal(const char* format, Primitive_Types type,
         total_digits = 1;
     }
 
-    char *hex_full = (char*)internal_malloc((total_digits + 1) * sizeof(char));
-    snprintf(hex_full, total_digits + 1, "%0*llX", total_digits,
-        (unsigned long long)raw);
+    if (hex_full == NULL) {
+        hex_full = (char*)internal_malloc((total_digits + 1) * sizeof(char));
+        snprintf(hex_full, total_digits + 1, "%0*llX", total_digits,
+            (unsigned long long)raw);
+    }
 
     int start_idx = 0;
     while (start_idx < total_digits - 1 && hex_full[start_idx] == '0') {
@@ -7089,14 +7066,14 @@ LFORTRAN_API void _lfortran_c80_atanh(struct _lfortran_complex_80 *x,
 //
 // A complex(16) value is two binary128 numbers. Every routine takes and
 // returns it through pointers, so the interface does not depend on how a
-// platform passes a pair of binary128 values by value. The arithmetic uses
-// the soft-float routines of lfortran_float128.c.
+// platform passes a pair of binary128 values by value. The arithmetic is
+// that of lfortran_complex128.h, with which the compiler also folds
+// complex(16) constant expressions, on the soft-float routines of
+// lfortran_float128.c.
 
 struct _lfortran_complex_128 {
     lf_float128 re, im;
 };
-
-static lf_float128 c128_real(double v) { return lf_f128_from_double(v); }
 
 static struct _lfortran_complex_128 c128_make(lf_float128 re, lf_float128 im) {
     struct _lfortran_complex_128 r;
@@ -7105,242 +7082,54 @@ static struct _lfortran_complex_128 c128_make(lf_float128 re, lf_float128 im) {
     return r;
 }
 
-static struct _lfortran_complex_128 c128_add(struct _lfortran_complex_128 a,
-        struct _lfortran_complex_128 b) {
-    return c128_make(lf_f128_add(a.re, b.re), lf_f128_add(a.im, b.im));
+static lf_complex128 c128_get(const struct _lfortran_complex_128 *p) {
+    return lf_c128_make(p->re, p->im);
 }
 
-static struct _lfortran_complex_128 c128_sub(struct _lfortran_complex_128 a,
-        struct _lfortran_complex_128 b) {
-    return c128_make(lf_f128_sub(a.re, b.re), lf_f128_sub(a.im, b.im));
-}
-
-static struct _lfortran_complex_128 c128_mul(struct _lfortran_complex_128 a,
-        struct _lfortran_complex_128 b) {
-    return c128_make(
-        lf_f128_sub(lf_f128_mul(a.re, b.re), lf_f128_mul(a.im, b.im)),
-        lf_f128_add(lf_f128_mul(a.re, b.im), lf_f128_mul(a.im, b.re)));
-}
-
-static struct _lfortran_complex_128 c128_div(struct _lfortran_complex_128 a,
-        struct _lfortran_complex_128 b) {
-    // Smith's algorithm, as for the lower precisions.
-    lf_float128 zero = c128_real(0.0);
-    if (lf_f128_cmp(lf_f128_abs(b.re), lf_f128_abs(b.im)) >= 0) {
-        if (lf_f128_eq(b.re, zero) && lf_f128_eq(b.im, zero)) {
-            return c128_make(lf_f128_div(a.re, zero), lf_f128_div(a.im, zero));
-        }
-        lf_float128 ratio = lf_f128_div(b.im, b.re);
-        lf_float128 denom = lf_f128_add(b.re, lf_f128_mul(b.im, ratio));
-        return c128_make(
-            lf_f128_div(lf_f128_add(a.re, lf_f128_mul(a.im, ratio)), denom),
-            lf_f128_div(lf_f128_sub(a.im, lf_f128_mul(a.re, ratio)), denom));
-    }
-    lf_float128 ratio = lf_f128_div(b.re, b.im);
-    lf_float128 denom = lf_f128_add(lf_f128_mul(b.re, ratio), b.im);
-    return c128_make(
-        lf_f128_div(lf_f128_add(lf_f128_mul(a.re, ratio), a.im), denom),
-        lf_f128_div(lf_f128_sub(lf_f128_mul(a.im, ratio), a.re), denom));
-}
-
-static lf_float128 c128_abs(struct _lfortran_complex_128 z) {
-    lf_float128 zero = c128_real(0.0);
-    lf_float128 x = lf_f128_abs(z.re), y = lf_f128_abs(z.im);
-    if (lf_f128_isinf(x) || lf_f128_isinf(y)) {
-        return lf_f128_div(c128_real(1.0), zero);
-    }
-    if (lf_f128_isnan(x) || lf_f128_isnan(y)) {
-        return lf_f128_div(zero, zero);
-    }
-    if (lf_f128_cmp(x, y) < 0) {
-        lf_float128 t = x;
-        x = y;
-        y = t;
-    }
-    if (lf_f128_eq(x, zero)) {
-        return zero;
-    }
-    // Scale by the larger part so that the squares do not overflow.
-    lf_float128 r = lf_f128_div(y, x);
-    return lf_f128_mul(x, lf_f128_sqrt(
-        lf_f128_add(c128_real(1.0), lf_f128_mul(r, r))));
-}
-
-static struct _lfortran_complex_128 c128_neg(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_neg(z.re), lf_f128_neg(z.im));
-}
-
-static struct _lfortran_complex_128 c128_mul_i(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_neg(z.im), z.re);
-}
-
-static struct _lfortran_complex_128 c128_sqrt(struct _lfortran_complex_128 z) {
-    lf_float128 zero = c128_real(0.0), half = c128_real(0.5);
-    if (lf_f128_eq(z.re, zero) && lf_f128_eq(z.im, zero)) {
-        return c128_make(zero, z.im);
-    }
-    lf_float128 t = lf_f128_sqrt(lf_f128_mul(half,
-        lf_f128_add(c128_abs(z), lf_f128_abs(z.re))));
-    lf_float128 two_t = lf_f128_add(t, t);
-    if (lf_f128_signbit(z.re) == 0) {
-        return c128_make(t, lf_f128_div(z.im, two_t));
-    }
-    lf_float128 re = lf_f128_div(lf_f128_abs(z.im), two_t);
-    return c128_make(re, lf_f128_signbit(z.im) ? lf_f128_neg(t) : t);
-}
-
-static struct _lfortran_complex_128 c128_exp(struct _lfortran_complex_128 z) {
-    lf_float128 e = lf_f128_exp(z.re);
-    return c128_make(lf_f128_mul(e, lf_f128_cos(z.im)),
-        lf_f128_mul(e, lf_f128_sin(z.im)));
-}
-
-static struct _lfortran_complex_128 c128_log(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_log(c128_abs(z)), lf_f128_atan2(z.im, z.re));
-}
-
-static struct _lfortran_complex_128 c128_sin(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_mul(lf_f128_sin(z.re), lf_f128_cosh(z.im)),
-        lf_f128_mul(lf_f128_cos(z.re), lf_f128_sinh(z.im)));
-}
-
-static struct _lfortran_complex_128 c128_cos(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_mul(lf_f128_cos(z.re), lf_f128_cosh(z.im)),
-        lf_f128_neg(lf_f128_mul(lf_f128_sin(z.re), lf_f128_sinh(z.im))));
-}
-
-static struct _lfortran_complex_128 c128_sinh(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_mul(lf_f128_sinh(z.re), lf_f128_cos(z.im)),
-        lf_f128_mul(lf_f128_cosh(z.re), lf_f128_sin(z.im)));
-}
-
-static struct _lfortran_complex_128 c128_cosh(struct _lfortran_complex_128 z) {
-    return c128_make(lf_f128_mul(lf_f128_cosh(z.re), lf_f128_cos(z.im)),
-        lf_f128_mul(lf_f128_sinh(z.re), lf_f128_sin(z.im)));
-}
-
-static struct _lfortran_complex_128 c128_tan(struct _lfortran_complex_128 z) {
-    return c128_div(c128_sin(z), c128_cos(z));
-}
-
-static struct _lfortran_complex_128 c128_tanh(struct _lfortran_complex_128 z) {
-    return c128_div(c128_sinh(z), c128_cosh(z));
-}
-
-static struct _lfortran_complex_128 c128_asinh(struct _lfortran_complex_128 z) {
-    // log(z + sqrt(z*z + 1))
-    struct _lfortran_complex_128 one = c128_make(c128_real(1.0), c128_real(0.0));
-    return c128_log(c128_add(z, c128_sqrt(c128_add(c128_mul(z, z), one))));
-}
-
-static struct _lfortran_complex_128 c128_asin(struct _lfortran_complex_128 z) {
-    // asin(z) = -i asinh(i z)
-    struct _lfortran_complex_128 r = c128_asinh(c128_mul_i(z));
-    return c128_make(r.im, lf_f128_neg(r.re));
-}
-
-static struct _lfortran_complex_128 c128_acos(struct _lfortran_complex_128 z) {
-    // acos(z) = pi/2 - asin(z)
-    lf_float128 half_pi = lf_float128_from_str("1.57079632679489661923132169163975144");
-    struct _lfortran_complex_128 a = c128_asin(z);
-    return c128_make(lf_f128_sub(half_pi, a.re), lf_f128_neg(a.im));
-}
-
-static struct _lfortran_complex_128 c128_acosh(struct _lfortran_complex_128 z) {
-    // log(z + sqrt(z + 1) sqrt(z - 1))
-    struct _lfortran_complex_128 one = c128_make(c128_real(1.0), c128_real(0.0));
-    return c128_log(c128_add(z, c128_mul(c128_sqrt(c128_add(z, one)),
-        c128_sqrt(c128_sub(z, one)))));
-}
-
-static struct _lfortran_complex_128 c128_atanh(struct _lfortran_complex_128 z) {
-    // (log(1 + z) - log(1 - z)) / 2
-    struct _lfortran_complex_128 one = c128_make(c128_real(1.0), c128_real(0.0));
-    struct _lfortran_complex_128 d = c128_sub(c128_log(c128_add(one, z)),
-        c128_log(c128_sub(one, z)));
-    lf_float128 half = c128_real(0.5);
-    return c128_make(lf_f128_mul(half, d.re), lf_f128_mul(half, d.im));
-}
-
-static struct _lfortran_complex_128 c128_atan(struct _lfortran_complex_128 z) {
-    // atan(z) = -i atanh(i z)
-    struct _lfortran_complex_128 r = c128_atanh(c128_mul_i(z));
-    return c128_make(r.im, lf_f128_neg(r.re));
-}
-
-static struct _lfortran_complex_128 c128_pow(struct _lfortran_complex_128 a,
-        struct _lfortran_complex_128 b) {
-    lf_float128 zero = c128_real(0.0);
-    if (lf_f128_eq(a.re, zero) && lf_f128_eq(a.im, zero)) {
-        if (lf_f128_eq(b.re, zero) && lf_f128_eq(b.im, zero)) {
-            return c128_make(c128_real(1.0), zero);
-        }
-        return c128_make(zero, zero);
-    }
-    return c128_exp(c128_mul(b, c128_log(a)));
-}
-
-static struct _lfortran_complex_128 c128_pow_int(struct _lfortran_complex_128 a,
-        int64_t n) {
-    struct _lfortran_complex_128 result = c128_make(c128_real(1.0), c128_real(0.0));
-    if (n == 0) {
-        return result;
-    }
-    uint64_t u = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
-    struct _lfortran_complex_128 base = a;
-    while (u != 0) {
-        if (u & 1) {
-            result = c128_mul(result, base);
-        }
-        base = c128_mul(base, base);
-        u >>= 1;
-    }
-    if (n < 0) {
-        result = c128_div(c128_make(c128_real(1.0), c128_real(0.0)), result);
-    }
-    return result;
+static void c128_put(struct _lfortran_complex_128 *p, lf_complex128 z) {
+    *p = c128_make(z.re, z.im);
 }
 
 LFORTRAN_API void _lfortran_complex_add_128(struct _lfortran_complex_128* a,
         struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
 {
-    *result = c128_add(*a, *b);
+    c128_put(result, lf_c128_add(c128_get(a), c128_get(b)));
 }
 
 LFORTRAN_API void _lfortran_complex_sub_128(struct _lfortran_complex_128* a,
         struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
 {
-    *result = c128_sub(*a, *b);
+    c128_put(result, lf_c128_sub(c128_get(a), c128_get(b)));
 }
 
 LFORTRAN_API void _lfortran_complex_mul_128(struct _lfortran_complex_128* a,
         struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
 {
-    *result = c128_mul(*a, *b);
+    c128_put(result, lf_c128_mul(c128_get(a), c128_get(b)));
 }
 
 LFORTRAN_API void _lfortran_complex_div_128(struct _lfortran_complex_128* a,
         struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
 {
-    *result = c128_div(*a, *b);
+    c128_put(result, lf_c128_div(c128_get(a), c128_get(b)));
 }
 
 LFORTRAN_API void _lfortran_complex_pow_128(struct _lfortran_complex_128* a,
         struct _lfortran_complex_128* b, struct _lfortran_complex_128 *result)
 {
-    *result = c128_pow(*a, *b);
+    c128_put(result, lf_c128_pow(c128_get(a), c128_get(b)));
 }
 
 LFORTRAN_API void _lfortran_complex_pow_int_128(struct _lfortran_complex_128* a,
         int64_t n, struct _lfortran_complex_128 *result)
 {
-    *result = c128_pow_int(*a, n);
+    c128_put(result, lf_c128_pow_int(c128_get(a), n));
 }
 
 LFORTRAN_API void _lfortran_c128_abs(struct _lfortran_complex_128 *x,
         lf_float128 *result)
 {
-    *result = c128_abs(*x);
+    *result = lf_c128_abs(c128_get(x));
 }
 
 LFORTRAN_API void _lfortran_c128_phase(struct _lfortran_complex_128 *x,
@@ -7350,35 +7139,35 @@ LFORTRAN_API void _lfortran_c128_phase(struct _lfortran_complex_128 *x,
 }
 
 LFORTRAN_API void _lfortran_c128_sqrt(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_sqrt(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_sqrt(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_exp(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_exp(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_exp(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_log(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_log(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_log(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_sin(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_sin(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_sin(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_cos(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_cos(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_cos(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_tan(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_tan(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_tan(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_sinh(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_sinh(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_sinh(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_cosh(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_cosh(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_cosh(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_tanh(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_tanh(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_tanh(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_asin(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_asin(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_asin(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_acos(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_acos(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_acos(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_atan(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_atan(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_atan(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_asinh(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_asinh(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_asinh(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_acosh(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_acosh(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_acosh(c128_get(x))); }
 LFORTRAN_API void _lfortran_c128_atanh(struct _lfortran_complex_128 *x,
-        struct _lfortran_complex_128 *result) { *result = c128_atanh(*x); }
+        struct _lfortran_complex_128 *result) { c128_put(result, lf_c128_atanh(c128_get(x))); }
 
 int64_t _lfortran_integer_pow_64(int64_t base, int64_t exponent){ // Binary Exponentiation
     int64_t res = 1;
@@ -7819,6 +7608,290 @@ LFORTRAN_API int64_t _lfortran_dishftc(int64_t val, int64_t shift_signed, int64_
                                   (uint32_t)bits_size);
 }
 
+// Trigonometric functions in degrees ------------------------------------------
+//
+// sind, cosd and tand reduce their argument exactly: |x| = 90*n + r with r
+// in [-45, 45] and no rounding error, so that every exact point is exact
+// (sind(n*360 + 30) = 0.5, cosd(90) = 0, tand(45) = 1, ...), sind and cosd
+// of an odd multiple of 45 are sqrt(1/2) correctly rounded, and large
+// arguments keep their accuracy. r*pi/180 is formed as a double-word
+// bh + bl, and the libm function of bh is corrected by bl. The signs of
+// zero and infinity follow the binary128 lf_f128_sind, lf_f128_cosd and
+// lf_f128_tand (and GFortran). The compiler folds constant expressions with
+// these same functions (lfortran_trig.h). real(4) evaluates in real(8), where
+// the reduction of every real(4) argument is equally exact, and rounds once.
+
+// pi/180 = TRIG_D2R_HI + TRIG_D2R_LO to about 2^-108 relative
+static const double TRIG_D2R_HI = 0.017453292519943295;
+static const double TRIG_D2R_LO = 2.9486522708701687e-19;
+
+// sqrt(1/2) correctly rounded: sin and cos of 45 degrees and a quarter turn
+static const double TRIG_SQRT1_2 = 0.7071067811865476;
+
+// sin(bh + bl) for |bh| <= ~pi/4 and |bl| <= ~ulp(bh): the bl correction
+// uses a short series for cos(bh).
+static double trig_sin_dw(double bh, double bl)
+{
+    double u = bh * bh;
+    return sin(bh) + bl * (1.0 - u * (0.5 - u / 24.0));
+}
+
+// cos(bh + bl), as trig_sin_dw
+static double trig_cos_dw(double bh, double bl)
+{
+    double u = bh * bh;
+    return cos(bh) - bl * bh * (1.0 - u * (1.0 / 6.0 - u / 120.0));
+}
+
+// tan(bh + bl) for even n and tan(bh + bl + pi/2) = -1/tan(bh + bl) for
+// odd n; the reciprocal is compensated for its rounding error.
+static double trig_tan_dw(int n, double bh, double bl)
+{
+    double t = tan(bh);
+    double dt = bl * (1.0 + t * t);
+    if ((n & 1) == 0) return t + dt;
+    double q = 1.0 / t;
+    double e = fma(-q, t, 1.0) - q * dt;
+    return -(q + q * e);
+}
+
+// |x| = 90*n + r with r in [-45, 45] (up to rounding of the quotient, which
+// only moves r slightly past 45), r exact, for finite x; returns n mod 4.
+static int trig_rem_90(double ax, double *r)
+{
+    // ax mod 360 is exact; below 2^52, ax - 90*q is exact directly.
+    if (ax >= 4503599627370496.0) ax = fmod(ax, 360.0);
+    double q = floor(ax / 90.0 + 0.5);
+    *r = ax - 90.0 * q;
+    return (int)((int64_t)q & 3);
+}
+
+// r * pi/180 as a double-word bh + bl
+static void trig_deg_to_rad(double r, double *bh, double *bl)
+{
+    *bh = r * TRIG_D2R_HI;
+    *bl = fma(r, TRIG_D2R_HI, -*bh) + r * TRIG_D2R_LO;
+}
+
+// sin of r degrees, |r| <= ~45; exact for r = 0 and r = +-30, correctly
+// rounded for r = +-45
+static double trig_sin_deg(double r)
+{
+    if (r == 0.0) return r;
+    if (r == 30.0) return 0.5;
+    if (r == -30.0) return -0.5;
+    if (r == 45.0) return TRIG_SQRT1_2;
+    if (r == -45.0) return -TRIG_SQRT1_2;
+    double bh, bl;
+    trig_deg_to_rad(r, &bh, &bl);
+    return trig_sin_dw(bh, bl);
+}
+
+// cos of r degrees, |r| <= ~45; exact for r = 0, correctly rounded for
+// r = +-45
+static double trig_cos_deg(double r)
+{
+    if (r == 0.0) return 1.0;
+    if (r == 45.0 || r == -45.0) return TRIG_SQRT1_2;
+    double bh, bl;
+    trig_deg_to_rad(r, &bh, &bl);
+    return trig_cos_dw(bh, bl);
+}
+
+LFORTRAN_API double _lfortran_dsind(double x)
+{
+    if (isnan(x) || isinf(x)) return x - x;
+    if (x == 0.0) return x;
+    double r, s;
+    int n = trig_rem_90(fabs(x), &r);
+    switch (n) {
+        case 0:  s = trig_sin_deg(r); break;
+        case 1:  s = trig_cos_deg(r); break;
+        case 2:  s = -trig_sin_deg(r); break;
+        default: s = -trig_cos_deg(r); break;
+    }
+    return signbit(x) ? -s : s;
+}
+
+LFORTRAN_API float _lfortran_ssind(float x)
+{
+    return (float)_lfortran_dsind(x);
+}
+
+LFORTRAN_API double _lfortran_dcosd(double x)
+{
+    if (isnan(x) || isinf(x)) return x - x;
+    double r;
+    int n = trig_rem_90(fabs(x), &r);
+    // cos(90 + 180k degrees) is exactly +0.
+    if ((n & 1) && r == 0.0) return 0.0;
+    switch (n) {
+        case 0:  return trig_cos_deg(r);
+        case 1:  return -trig_sin_deg(r);
+        case 2:  return -trig_cos_deg(r);
+        default: return trig_sin_deg(r);
+    }
+}
+
+LFORTRAN_API float _lfortran_scosd(float x)
+{
+    return (float)_lfortran_dcosd(x);
+}
+
+LFORTRAN_API double _lfortran_dtand(double x)
+{
+    if (isnan(x) || isinf(x)) return x - x;
+    if (x == 0.0) return x;
+    double r, t;
+    int n = trig_rem_90(fabs(x), &r);
+    if (r == 0.0) {
+        // A pole at an odd multiple of 90 degrees: +inf at 90, -inf at 270.
+        if (n & 1) return (signbit(x) != 0) != (n == 3) ? -INFINITY : INFINITY;
+        t = 0.0;
+    } else if (r == 45.0 || r == -45.0) {
+        t = ((r > 0) != ((n & 1) != 0)) ? 1.0 : -1.0;
+    } else {
+        double bh, bl;
+        trig_deg_to_rad(r, &bh, &bl);
+        t = trig_tan_dw(n, bh, bl);
+    }
+    return signbit(x) ? -t : t;
+}
+
+LFORTRAN_API float _lfortran_stand(float x)
+{
+    return (float)_lfortran_dtand(x);
+}
+
+// Trigonometric functions in half revolutions ---------------------------------
+//
+// sinpi, cospi and tanpi reduce their argument exactly, |x| = n/2 + r with r
+// in [-1/4, 1/4], and evaluate as sind, cosd and tand with r*pi formed as a
+// double-word. The signs of zero and infinity follow IEEE 754 sinPi, cosPi
+// and tanPi, like the binary128 lf_f128_sinpi, lf_f128_cospi and
+// lf_f128_tanpi. The compiler folds constant expressions with these same
+// functions (lfortran_trig.h).
+
+// pi = TRIG_PI_HI + TRIG_PI_LO to about 2^-107 relative
+static const double TRIG_PI_HI = 3.141592653589793;
+static const double TRIG_PI_LO = 1.2246467991473532e-16;
+
+// |x| = n/2 + r with r in [-1/4, 1/4], n and r exact, for finite x; returns
+// n mod 4.
+static int trig_rem_half(double ax, double *r)
+{
+    // 2^53 and above are even integers.
+    if (ax >= 9007199254740992.0) {
+        *r = 0.0;
+        return 0;
+    }
+    // t = 2*ax, its fraction t - floor(t) and q + 1 are exact, so q is t
+    // rounded to nearest and r is exact, in any rounding mode (t + 0.5 is
+    // not: it rounds, e.g. to a tie for ax just below 1/4).
+    double t = 2.0 * ax;
+    double q = floor(t);
+    if (t - q >= 0.5) q += 1.0;
+    *r = ax - 0.5 * q;
+    return (int)((int64_t)q & 3);
+}
+
+// r * pi as a double-word bh + bl
+static void trig_halfrev_to_rad(double r, double *bh, double *bl)
+{
+    *bh = r * TRIG_PI_HI;
+    *bl = fma(r, TRIG_PI_HI, -*bh) + r * TRIG_PI_LO;
+}
+
+// sin of r half turns, |r| <= 1/4; correctly rounded for r = +-1/4
+static double trig_sin_halfrev(double r)
+{
+    if (r == 0.25) return TRIG_SQRT1_2;
+    if (r == -0.25) return -TRIG_SQRT1_2;
+    double bh, bl;
+    trig_halfrev_to_rad(r, &bh, &bl);
+    return trig_sin_dw(bh, bl);
+}
+
+// cos of r half turns, |r| <= 1/4; correctly rounded for r = +-1/4
+static double trig_cos_halfrev(double r)
+{
+    if (r == 0.25 || r == -0.25) return TRIG_SQRT1_2;
+    double bh, bl;
+    trig_halfrev_to_rad(r, &bh, &bl);
+    return trig_cos_dw(bh, bl);
+}
+
+LFORTRAN_API double _lfortran_dsinpi(double x)
+{
+    if (isnan(x) || isinf(x)) return x - x;
+    if (x == 0.0) return x;
+    double r, s;
+    int n = trig_rem_half(fabs(x), &r);
+    // sin(pi*k) is exactly 0, with the sign of x.
+    if ((n & 1) == 0 && r == 0.0) return signbit(x) ? -0.0 : 0.0;
+    switch (n) {
+        case 0:  s = trig_sin_halfrev(r); break;
+        case 1:  s = trig_cos_halfrev(r); break;
+        case 2:  s = -trig_sin_halfrev(r); break;
+        default: s = -trig_cos_halfrev(r); break;
+    }
+    return signbit(x) ? -s : s;
+}
+
+LFORTRAN_API float _lfortran_ssinpi(float x)
+{
+    return (float)_lfortran_dsinpi(x);
+}
+
+LFORTRAN_API double _lfortran_dcospi(double x)
+{
+    if (isnan(x) || isinf(x)) return x - x;
+    double r;
+    int n = trig_rem_half(fabs(x), &r);
+    // cos(pi*(k + 1/2)) is exactly +0.
+    if ((n & 1) && r == 0.0) return 0.0;
+    switch (n) {
+        case 0:  return trig_cos_halfrev(r);
+        case 1:  return -trig_sin_halfrev(r);
+        case 2:  return -trig_cos_halfrev(r);
+        default: return trig_sin_halfrev(r);
+    }
+}
+
+LFORTRAN_API float _lfortran_scospi(float x)
+{
+    return (float)_lfortran_dcospi(x);
+}
+
+LFORTRAN_API double _lfortran_dtanpi(double x)
+{
+    if (isnan(x) || isinf(x)) return x - x;
+    if (x == 0.0) return x;
+    double r, t;
+    int n = trig_rem_half(fabs(x), &r);
+    int negative = signbit(x) != 0;
+    if (r == 0.0) {
+        // tan(pi*k) is +0 for even k and -0 for odd k, times the sign of x;
+        // tan(pi*(k + 1/2)) is +inf for even k and -inf for odd k.
+        if (n & 1) return negative != (n == 3) ? -INFINITY : INFINITY;
+        return negative != (n == 2) ? -0.0 : 0.0;
+    }
+    if (r == 0.25 || r == -0.25) {
+        // tan(pi*(k/2 + 1/4)) is exactly +-1.
+        t = ((r > 0) != ((n & 1) != 0)) ? 1.0 : -1.0;
+    } else {
+        double bh, bl;
+        trig_halfrev_to_rad(r, &bh, &bl);
+        t = trig_tan_dw(n, bh, bl);
+    }
+    return negative ? -t : t;
+}
+
+LFORTRAN_API float _lfortran_stanpi(float x)
+{
+    return (float)_lfortran_dtanpi(x);
+}
+
 // sin -------------------------------------------------------------------------
 
 LFORTRAN_API float _lfortran_ssin(float x)
@@ -7839,18 +7912,6 @@ LFORTRAN_API float_complex_t _lfortran_csin(float_complex_t x)
 LFORTRAN_API double_complex_t _lfortran_zsin(double_complex_t x)
 {
     return csin(x);
-}
-
-LFORTRAN_API float _lfortran_ssind(float x)
-{
-    float radians = (float)((x * PI) / 180.0);
-    return (float)sin(radians);
-}
-
-LFORTRAN_API double _lfortran_dsind(double x)
-{
-    double radians = (x * PI) / 180.0;
-    return sin(radians);
 }
 
 // cos -------------------------------------------------------------------------
@@ -7875,18 +7936,6 @@ LFORTRAN_API double_complex_t _lfortran_zcos(double_complex_t x)
     return ccos(x);
 }
 
-LFORTRAN_API float _lfortran_scosd(float x)
-{
-    float radians = (float)((x * PI) / 180.0);
-    return (float)cos(radians);
-}
-
-LFORTRAN_API double _lfortran_dcosd(double x)
-{
-    double radians = (x * PI) / 180.0;
-    return cos(radians);
-}
-
 // tan -------------------------------------------------------------------------
 
 LFORTRAN_API float _lfortran_stan(float x)
@@ -7907,18 +7956,6 @@ LFORTRAN_API float_complex_t _lfortran_ctan(float_complex_t x)
 LFORTRAN_API double_complex_t _lfortran_ztan(double_complex_t x)
 {
     return ctan(x);
-}
-
-LFORTRAN_API float _lfortran_stand(float x)
-{
-    float radians = (float)((x * PI) / 180.0);
-    return (float)tan(radians);
-}
-
-LFORTRAN_API double _lfortran_dtand(double x)
-{
-    double radians = (x * PI) / 180.0;
-    return tan(radians);
 }
 
 // sinh ------------------------------------------------------------------------
@@ -19343,77 +19380,6 @@ LFORTRAN_API void _lfortran_string_read_c128_array(char *str, int64_t len, char 
 
 #ifndef _MSC_VER
 
-static long double f128_to_long_double(lf_float128 v) {
-#if LDBL_MANT_DIG == 64
-    uint64_t lo, hi;
-    memcpy(&lo, v.bytes, sizeof(lo));
-    memcpy(&hi, v.bytes + 8, sizeof(hi));
-    uint64_t sign = hi >> 63;
-    uint64_t exponent = (hi >> 48) & 0x7FFF;
-    uint64_t frac_hi = hi & 0xFFFFFFFFFFFFULL;
-    uint64_t mant = 0;
-    if (exponent == 0x7FFF) {
-        if ((frac_hi | lo) != 0) {
-            mant = (3ULL << 62) | (frac_hi << 14) | (lo >> 50);
-        } else {
-            mant = 1ULL << 63;
-        }
-    } else {
-        // The 63 fraction bits kept, and the 49 below them to round away.
-        uint64_t kept = (frac_hi << 15) | (lo >> 49);
-        uint64_t rest = lo & ((1ULL << 49) - 1);
-        if (exponent == 0) {
-            mant = kept;
-        } else {
-            mant = (1ULL << 63) | kept;
-        }
-        uint64_t half = 1ULL << 48;
-        if (rest > half || (rest == half && (mant & 1))) {
-            mant++;
-            if (mant == 0) {
-                mant = 1ULL << 63;
-                exponent++;
-            } else if (exponent == 0 && (mant >> 63)) {
-                exponent = 1;
-            }
-        }
-        if (exponent == 0x7FFF) {
-            mant = 1ULL << 63;
-        }
-    }
-    uint16_t sign_exponent = (uint16_t)((sign << 15) | exponent);
-    long double out = 0;
-    memcpy(&out, &mant, sizeof(mant));
-    memcpy((char*)&out + 8, &sign_exponent, sizeof(sign_exponent));
-    return out;
-#else
-    return (long double)lf_f128_to_double(v);
-#endif
-}
-
-static lf_float128 long_double_to_f128(long double v) {
-#if LDBL_MANT_DIG == 64
-    uint64_t mant;
-    uint16_t sign_exponent;
-    memcpy(&mant, &v, sizeof(mant));
-    memcpy(&sign_exponent, (const char*)&v + 8, sizeof(sign_exponent));
-    uint64_t sign = sign_exponent >> 15;
-    uint64_t exponent = sign_exponent & 0x7FFF;
-    uint64_t fraction = mant & 0x7FFFFFFFFFFFFFFFULL;
-    if (exponent == 0 && (mant >> 63)) {
-        exponent = 1;
-    }
-    uint64_t lo = fraction << 49;
-    uint64_t hi = (sign << 63) | (exponent << 48) | (fraction >> 15);
-    lf_float128 out;
-    memcpy(out.bytes, &lo, sizeof(lo));
-    memcpy(out.bytes + 8, &hi, sizeof(hi));
-    return out;
-#else
-    return lf_f128_from_double((double)v);
-#endif
-}
-
 static bool unit_is_unformatted(int32_t unit_num) {
     if (unit_num == -1) return false;
     bool unit_file_bin = false;
@@ -19426,13 +19392,13 @@ static bool unit_is_unformatted(int32_t unit_num) {
 }
 
 static struct _lfortran_complex_128 c80_to_c128(const struct _lfortran_complex_80 *c) {
-    return c128_make(long_double_to_f128(load_real10(&c->re)),
-        long_double_to_f128(load_real10(&c->im)));
+    return c128_make(lf_f128_from_long_double(load_real10(&c->re)),
+        lf_f128_from_long_double(load_real10(&c->im)));
 }
 
 static void c128_to_c80(struct _lfortran_complex_80 *c, struct _lfortran_complex_128 v) {
-    store_real10_storage(&c->re, f128_to_long_double(v.re));
-    store_real10_storage(&c->im, f128_to_long_double(v.im));
+    store_real10_storage(&c->re, lf_f128_to_long_double(v.re));
+    store_real10_storage(&c->im, lf_f128_to_long_double(v.im));
 }
 
 LFORTRAN_API void _lfortran_read_complex_float80(struct _lfortran_complex_80 *p, int32_t unit_num, int32_t *iostat)
@@ -20242,6 +20208,12 @@ static inline void print_stacktrace_raw_addresses(struct Stacktrace *d, bool use
 
 LFORTRAN_API void print_stacktrace_addresses(char *filename, bool use_colors) {
 #ifdef HAVE_RUNTIME_STACKTRACE
+    // Color only a terminal, unless NO_COLOR is set (https://no-color.org).
+    if (use_colors) {
+        const char *no_color = getenv("NO_COLOR");
+        use_colors = isatty(lfortran_fileno(stderr))
+            && (no_color == NULL || no_color[0] == '\0');
+    }
     source_filename = filename;
     struct Stacktrace d = get_stacktrace_addresses();
     get_local_address(&d);
@@ -20647,17 +20619,47 @@ void namelist_write_impl(nml_writer_t *w,
     write_str(w, " /\n");
 }
 
+// A null statement DELIM keeps the unit mode. Otherwise none/apostrophe/quote
+// select the mode for this write only and do not change the unit.
+// Returns -1 after reporting a value that is none of those three.
+static int nml_write_delim(const char *delim, int64_t delim_len,
+        int unit_delim, int32_t *iostat)
+{
+    if (delim == NULL) {
+        return unit_delim;
+    }
+    if (fortran_str_eq(delim, delim_len, "none")) {
+        return 0;
+    }
+    if (fortran_str_eq(delim, delim_len, "apostrophe")) {
+        return 1;
+    }
+    if (fortran_str_eq(delim, delim_len, "quote")) {
+        return 2;
+    }
+    if (iostat) {
+        *iostat = LFORTRAN_IOSTAT_NML_INVALID_DELIM;
+        return -1;
+    }
+    fprintf(stderr,
+        "Runtime Error: DELIM specifier in namelist WRITE has invalid value '%.*s'\n",
+        delim_len > 0 ? (int)delim_len : 0, delim);
+    exit(1);
+}
+
 LFORTRAN_API void _lfortran_namelist_write(
     int32_t unit_num,
     int32_t *iostat,
-    const lfortran_nml_group_t *group)
+    const lfortran_nml_group_t *group,
+    const char *delim,
+    int64_t delim_len)
 {
     bool unit_file_bin;
     int access_id;
     bool read_access, write_access;
-    int delim;
+    int unit_delim;
     int decimal_mode;
-    FILE* filep = get_file_pointer_from_unit(unit_num, &unit_file_bin, &access_id, &read_access, &write_access, &delim, NULL, NULL, NULL, &decimal_mode, NULL, NULL, NULL);
+    FILE* filep = get_file_pointer_from_unit(unit_num, &unit_file_bin, &access_id, &read_access, &write_access, &unit_delim, NULL, NULL, NULL, &decimal_mode, NULL, NULL, NULL);
 
     if (filep && !write_access) {
         if (iostat) {
@@ -20683,12 +20685,17 @@ LFORTRAN_API void _lfortran_namelist_write(
         }
     }
 
+    int delim_mode = nml_write_delim(delim, delim_len, unit_delim, iostat);
+    if (delim_mode < 0) {
+        return;
+    }
+
     nml_writer_t w;
     memset(&w, 0, sizeof(w));
 
     w.fp = filep;
     w.is_file = true;
-    w.delim = delim; 
+    w.delim = delim_mode;
 
     namelist_write_impl(&w, group);
 
@@ -20700,8 +20707,15 @@ LFORTRAN_API void _lfortran_namelist_write_str_array(
     int64_t elem_len,
     int64_t n_elems,
     int32_t *iostat,
-    const lfortran_nml_group_t *group)
+    const lfortran_nml_group_t *group,
+    const char *delim,
+    int64_t delim_len)
 {
+    int delim_mode = nml_write_delim(delim, delim_len, 0, iostat);
+    if (delim_mode < 0) {
+        return;
+    }
+
     nml_writer_t w;
     memset(&w, 0, sizeof(w));
 
@@ -20712,7 +20726,7 @@ LFORTRAN_API void _lfortran_namelist_write_str_array(
     w.pos = 0;
 
     w.is_file = false;
-    w.delim = 0; 
+    w.delim = delim_mode; 
 
     namelist_write_impl(&w, group);
 
