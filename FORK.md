@@ -65,8 +65,9 @@ Fixes in `main` that have no upstream pull request yet: static storage for
 main program variables (bf4b95bcc1), the names a cell defines, uses and
 assigns (df3bf93103), LSP union pointers when copying arrays and tuples
 (eeb73076d5), `transfer` of an allocatable array to a character mold
-(a95f935133), and indexing a fixed-size array constant by a variable
-(18596e2ab7).
+(a95f935133), indexing a fixed-size array constant by a variable
+(18596e2ab7), and the size of global arrays of characters of kind 2 and 4
+(a7a43d599d).
 
 ## Style
 
