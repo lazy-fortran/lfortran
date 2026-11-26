@@ -1,2 +1,0 @@
-src/lfortran/semantics/ast_common_visitor.h
-src/libasr/codegen/asr_to_llvm.cpp

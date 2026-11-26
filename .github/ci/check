@@ -4,7 +4,7 @@
 # runner keeps the work tree's build/ and its TMPDIR between checks, so the
 # pixi environments, the solved lock file, the build tree and sccache
 # persist. The reference tests run in full and the integration tests in
-# upstream's smoke selection, as in its Quick checks; .fortyard/verify runs
+# upstream's smoke selection, as in its Quick checks; .github/ci/verify runs
 # the full integration suite on main. It runs on Linux x86_64; macOS arm64
 # is supported but has not yet been run. FY_CHECK_LLVM selects another LLVM
 # environment of pixi.toml (default llvm11); the reference tests need LLVM 11
@@ -69,7 +69,7 @@ if [ "$env" = llvm11 ]; then
 else
     echo "reference tests skipped (they need llvm11)"
 fi
-# Landings run upstream's smoke selection; .fortyard/verify runs them all.
+# Landings run upstream's smoke selection; .github/ci/verify runs them all.
 if [ "${FY_CHECK_INTEGRATION:-smoke}" = full ]; then
     run integration pixi run -e "$env" integration_tests -b llvm -j "$jobs"
     echo "integration tests (LLVM, all) passed"
