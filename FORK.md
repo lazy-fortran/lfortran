@@ -1,14 +1,13 @@
 # The lazy-fortran fork of LFortran
 
 This fork carries fixes that our projects need before upstream has them, on
-top of [lfortran/lfortran](https://github.com/lfortran/lfortran). Its primary
-copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
-(lazy-fortran/lfortran) is a mirror that fortyard pushes `main` to.
+top of [lfortran/lfortran](https://github.com/lfortran/lfortran). It lives on
+GitHub as lazy-fortran/lfortran.
 
 ## Rules
 
 - `main` is the only branch anything depends on. Consumers pin a commit on
-  it; fortyard's web build pins one in `web/lfortran.rev`. `main` is never
+  it. `main` is never
   rebased or force-pushed, so pinned commits stay valid.
 - A fix meant for upstream is one branch on upstream's `main`, and that
   branch is the head of a draft pull request against lfortran/lfortran (from
@@ -24,14 +23,15 @@ copy is on fortyard (https://code.tugraz.at/yard/lfortran); GitHub
 - Nothing reaches upstream by itself. Pushing a pull request branch, opening
   a pull request and marking one ready are done by hand, and pull requests
   stay drafts until Chris decides.
-- Changes that only the fork needs (this file, `.fortyard/`, CI) are
-  short-lived branches landed on fortyard as one squashed commit
-  (`fy land lfortran BRANCH`).
+- Changes that only the fork needs (this file, `.github/ci/`, CI) are
+  short-lived branches of one commit each, landed by a pull request through
+  the merge queue. The queue merges with a merge commit, so that upstream
+  merges keep upstream's history as an ancestor of `main`.
 - Upstream is brought in by merging an upstream commit into `main` with a
   merge commit.
-- Numbers: the fork's changes and issues on fortyard count on from its
-  GitHub numbers (`#25` and up). `(#17426)` to `(#17440)` on `main` are
-  fortyard numbers from before that and not upstream's. Upstream is always
+- Numbers: `(#17426)` to `(#17440)` and the numbers from `#25` to the move
+  back to GitHub (November 2026) on `main` belong to the retired fortyard
+  server, not to upstream or to this repository's GitHub pull requests. Upstream is always
   written `lfortran/lfortran#N`.
 
 ## Pull requests the fork carries
@@ -71,34 +71,30 @@ assigns (df3bf93103), LSP union pointers when copying arrays and tuples
 
 ## Style
 
-The Fortran code follows upstream's style, so `.fortyard/format-exclude`
-exempts it from fortyard's `fo fmt` check.
+The Fortran code follows upstream's style and is not formatted with
+`fo fmt`.
 
 ## The check
 
-`.fortyard/check` runs upstream's own developer workflow on a fortyard
-runner: `pixi run -e llvm11 build`, the reference tests and upstream's smoke
-selection of the integration tests. The runner keeps the build tree, the
-pixi environments and sccache between checks, so a check takes about two
-minutes. GitHub Actions run upstream's full workflows after each push to
-`main`, as advisory coverage of all platforms and LLVM versions.
-After each landing fortyard also verifies `main` with `.fortyard/verify`, the
-same check with all integration tests; a regression it finds is bisected to
-its commit and reported as an issue. Both scripts run on Linux x86_64. They
-also support macOS arm64, where they have not yet been run. `FY_CHECK_LLVM`
+`.github/ci/check` runs upstream's own developer workflow in the merge
+queue: `pixi run -e llvm11 build`, the reference tests and upstream's smoke
+selection of the integration tests. Each night `.github/ci/verify` checks
+`main`, the same check with all integration tests. Upstream's own workflows
+are removed, so that they do not run on the fork. Both scripts run on Linux x86_64. They
+also support macOS arm64, where they have not yet been run. `CHECK_LLVM`
 names another LLVM environment of `pixi.toml` (default `llvm11`); the
 reference tests need LLVM 11 and are skipped with any other.
 
 ## Syncing with upstream
 
 1. On a branch from `main`, `git merge --no-ff <upstream commit>`. Take
-   upstream's version of files the fork does not change on purpose,
-   including `.github/workflows`.
+   upstream's version of files the fork does not change on purpose, except
+   upstream's workflows in `.github/workflows`, which stay removed
+   (`git rm` them when the merge brings them back).
 2. Check the merge locally (`pixi run -e llvm11 build`, `tests`).
-3. Land the branch (`fy land lfortran BRANCH`). A branch that is `main` plus
-   one merge commit lands as that merge, so upstream's history stays an
-   ancestor of `main` and later merges stay small. If `main` moved in the
-   meantime, fortyard refuses it; merge again on the current `main`.
+3. Open a pull request of the branch and put it into the merge queue
+   (`gh pr merge --auto`). It lands with a merge commit, so upstream's
+   history stays an ancestor of `main` and later merges stay small.
 
 ## Merging a pull request branch
 

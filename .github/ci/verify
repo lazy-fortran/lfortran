@@ -1,4 +1,3 @@
 #!/bin/sh
-# Verification of main on fortyard (after landings, by a runner): the
-# landing check with all integration tests instead of the smoke selection.
-exec env FY_CHECK_INTEGRATION=full "$(dirname "$0")/check"
+# Nightly verification of main: the merge-queue check with all integration tests instead of the smoke selection.
+exec env CHECK_INTEGRATION=full "$(dirname "$0")/check"
